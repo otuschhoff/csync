@@ -16,6 +16,7 @@ import (
 	"csync"
 )
 
+// statsCollector aggregates operation counts and byte totals using atomic operations.
 type statsCollector struct {
 	lstat     atomic.Uint64
 	readdir   atomic.Uint64
@@ -30,6 +31,7 @@ type statsCollector struct {
 	bytes     atomic.Uint64
 }
 
+// statsSnapshot captures a point-in-time view of collected statistics.
 type statsSnapshot struct {
 	lstat     uint64
 	readdir   uint64
@@ -44,6 +46,7 @@ type statsSnapshot struct {
 	bytes     uint64
 }
 
+// snapshot returns a consistent view of current stats at a given moment.
 func (s *statsCollector) snapshot() statsSnapshot {
 	return statsSnapshot{
 		lstat:     s.lstat.Load(),
@@ -215,6 +218,7 @@ func main() {
 	}
 }
 
+// logMsg prints a timestamped log message with operation kind, details, and optional error.
 func logMsg(kind string, details interface{}, err error) {
 	if err != nil {
 		fmt.Printf("[%s] %v (err=%v)\n", kind, details, err)
@@ -223,6 +227,7 @@ func logMsg(kind string, details interface{}, err error) {
 	fmt.Printf("[%s] %v\n", kind, details)
 }
 
+// runStatsPrinter runs a background goroutine that prints stats every 10 seconds and on completion.
 func runStatsPrinter(stats *statsCollector, done <-chan struct{}, start time.Time) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -242,11 +247,13 @@ func runStatsPrinter(stats *statsCollector, done <-chan struct{}, start time.Tim
 			now := time.Now()
 			snapshot := stats.snapshot()
 			printStatsTable(snapshot, lastSnapshot, start, lastTime)
+			_ = now
 			return
 		}
 	}
 }
 
+// printStatsTable formats and renders a stats table with operation counts and rates.
 func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	elapsed := time.Since(start).Seconds()
 	interval := time.Since(prevTime).Seconds()
@@ -299,6 +306,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	t.Render()
 }
 
+// getPrevTotal returns the previous total for a named operation from a snapshot.
 func getPrevTotal(prev statsSnapshot, name string) uint64 {
 	switch name {
 	case "lstat":
@@ -326,6 +334,7 @@ func getPrevTotal(prev statsSnapshot, name string) uint64 {
 	}
 }
 
+// formatCount formats an unsigned integer with thousands separators.
 func formatCount(n uint64) string {
 	s := fmt.Sprintf("%d", n)
 	if len(s) <= 3 {
@@ -344,10 +353,12 @@ func formatCount(n uint64) string {
 	return b.String()
 }
 
+// formatFloat formats a floating-point number to two decimal places.
 func formatFloat(f float64) string {
 	return fmt.Sprintf("%.2f", f)
 }
 
+// formatBytes formats a byte count as a human-readable string (B, KB, MB, GB, TB).
 func formatBytes(n uint64) string {
 	units := []string{"B", "KB", "MB", "GB", "TB"}
 	v := float64(n)
@@ -359,6 +370,7 @@ func formatBytes(n uint64) string {
 	return fmt.Sprintf("%.2f %s", v, units[idx])
 }
 
+// formatBytesRate formats a transfer rate in bytes/sec as a human-readable string.
 func formatBytesRate(rate float64) string {
 	if rate < 0 {
 		rate = 0
