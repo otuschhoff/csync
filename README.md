@@ -39,7 +39,7 @@ Install and run the bundled CLI to sync one directory into another:
 go install ./cmd/csync
 csync --help
 csync --verbose --stats /src/path /dst/path
-csync --exclude .git --exclude node_modules --max-workers 8 /src /dst
+csync --exclude .git --exclude node_modules --exclude .snapshot --max-workers 32 /src /dst
 csync --verbose --log-op lstat,readdir --no-log-op copy /src /dst
 ```
 
@@ -48,10 +48,12 @@ csync --verbose --log-op lstat,readdir --no-log-op copy /src /dst
 - `--no-log-op <op>` removes operations from verbose output (comma-separated or repeatable).
 - In verbose mode, chmod/chown/chtimes logs include before/after values (modes, UID:GID, timestamps).
 - `--stats` renders a go-pretty table every 10s with cumulative and interval rates.
-- `--exclude <name>` skips entries whose base name matches; repeatable.
+- `--exclude <name>` skips entries whose base name matches; repeatable. Default: no exclusions.
 - `--max-workers <n>` caps the worker pool (default 32).
 - `--ignore-atime` ignores atime differences when syncing times, preserving destination atime when possible.
 - `--show-workers` prints detected CPUs and the configured worker pool size at start.
+
+Note: csync always skips `.snapshot` directories internally; `--exclude` starts empty so you can opt into additional names.
 
 ## Usage
 
