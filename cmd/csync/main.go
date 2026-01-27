@@ -279,7 +279,7 @@ func main() {
 
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print verbose operation logs")
 	rootCmd.Flags().BoolVar(&statsFlag, "stats", false, "print stats every 10s during sync")
-	rootCmd.Flags().IntVar(&workers, "max-workers", 4, "maximum number of concurrent workers (>=1)")
+	rootCmd.Flags().IntVar(&workers, "max-workers", 32, "maximum number of concurrent workers (>=1)")
 	rootCmd.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude entries whose base name matches (repeatable)")
 	rootCmd.Flags().StringArrayVar(&logOpsFlag, "log-op", nil, "include additional operations in verbose output (comma-separated or repeatable)")
 	rootCmd.Flags().StringArrayVar(&noLogOpsFlag, "no-log-op", nil, "exclude operations from verbose output (comma-separated or repeatable)")
@@ -354,9 +354,10 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		{"copy", cur.copies},
 	}
 
-	totals := make([]string, len(rows)+1)
-	avgs := make([]string, len(rows)+1)
-	intervals := make([]string, len(rows)+1)
+	var names []string
+	var totals []string
+	var avgs []string
+	var intervals []string
 
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
@@ -367,39 +368,49 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		{Number: 3, Align: text.AlignRight},
 		{Number: 4, Align: text.AlignRight},
 	})
-	t.AppendHeader(table.Row{"Operation", "Total", "Avg/s", "Avg/s (interval)"})
+	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)")})
 
 	for i, r := range rows {
+		if r.total == 0 {
+			continue
+		}
 		prevTotal := getPrevTotal(prev, r.name)
 		totalRate := float64(r.total) / elapsed
 		intervalRate := float64(r.total-prevTotal) / interval
-		totals[i] = formatScaledUint(r.total, "")
-		avgs[i] = formatScaledFloat(totalRate, "/s")
-		intervals[i] = formatScaledFloat(intervalRate, "/s")
+		names = append(names, r.name)
+		totals = append(totals, formatScaledUint(r.total, ""))
+		avgs = append(avgs, formatScaledFloat(totalRate, "/s"))
+		intervals = append(intervals, formatScaledFloat(intervalRate, "/s"))
 	}
 
 	prevBytes := prev.bytes
 	bytesRateTotal := float64(cur.bytes) / elapsed
 	bytesRateInterval := float64(cur.bytes-prevBytes) / interval
-	bytesIdx := len(rows)
-	totals[bytesIdx] = formatScaledUint(cur.bytes, "B")
-	avgs[bytesIdx] = formatScaledFloat(bytesRateTotal, "B/s")
-	intervals[bytesIdx] = formatScaledFloat(bytesRateInterval, "B/s")
+	if cur.bytes > 0 {
+		names = append(names, "bytes")
+		totals = append(totals, formatScaledUint(cur.bytes, "B"))
+		avgs = append(avgs, formatScaledFloat(bytesRateTotal, "B/s"))
+		intervals = append(intervals, formatScaledFloat(bytesRateInterval, "B/s"))
+	}
+
+	// If nothing recorded, still render headers for clarity.
+	if len(names) == 0 {
+		t.Render()
+		return
+	}
 
 	totals = alignDecimal(totals)
 	avgs = alignDecimal(avgs)
 	intervals = alignDecimal(intervals)
 
-	for i, r := range rows {
+	for i, name := range names {
 		t.AppendRow(table.Row{
-			r.name,
+			text.Bold.Sprint(name),
 			totals[i],
 			avgs[i],
 			intervals[i],
 		})
 	}
-
-	t.AppendRow(table.Row{"bytes", totals[bytesIdx], avgs[bytesIdx], intervals[bytesIdx]})
 
 	t.Render()
 }
