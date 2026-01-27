@@ -896,3 +896,58 @@ func TestSymlinkTargetMismatchRecreate(t *testing.T) {
 		t.Errorf("symlink target should be 'target1.txt', got '%s'", dstTarget)
 	}
 }
+
+// TestOnIgnoreCallback verifies that OnIgnore callback is called and can filter entries.
+func TestOnIgnoreCallback(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create source structure with files to ignore
+	os.WriteFile(filepath.Join(srcDir, "include.txt"), []byte("include"), 0644)
+	os.WriteFile(filepath.Join(srcDir, "exclude.txt"), []byte("exclude"), 0644)
+	os.Mkdir(filepath.Join(srcDir, "subdir"), 0755)
+	os.WriteFile(filepath.Join(srcDir, "subdir", "file.txt"), []byte("file"), 0644)
+
+	// Track ignored entries
+	ignoredEntries := make(map[string]bool)
+
+	callbacks := Callbacks{
+		OnIgnore: func(name string, path string, isDir bool, fileInfo os.FileInfo, err error) bool {
+			// Ignore files starting with "exclude" and .snapshot directories
+			if strings.HasPrefix(name, "exclude") {
+				ignoredEntries[name] = true
+				return true
+			}
+			if isDir && name == ".snapshot" {
+				ignoredEntries[name] = true
+				return true
+			}
+			return false
+		},
+	}
+
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, callbacks)
+	if err := sync.Run(); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	// Verify exclude.txt was ignored
+	if _, err := os.Stat(filepath.Join(dstDir, "exclude.txt")); err == nil {
+		t.Errorf("exclude.txt should have been ignored")
+	}
+
+	// Verify include.txt was synced
+	if _, err := os.Stat(filepath.Join(dstDir, "include.txt")); err != nil {
+		t.Errorf("include.txt should have been synced: %v", err)
+	}
+
+	// Verify subdir was synced
+	if _, err := os.Stat(filepath.Join(dstDir, "subdir")); err != nil {
+		t.Errorf("subdir should have been synced: %v", err)
+	}
+
+	// Verify exclude was actually called
+	if len(ignoredEntries) == 0 {
+		t.Errorf("OnIgnore callback was not called")
+	}
+}

@@ -145,6 +145,13 @@ type Callbacks struct {
 	// OnChtimes is called when changing modification/access times.
 	// Called with the path and any error encountered.
 	OnChtimes func(path string, err error)
+
+	// OnIgnore is called to determine if a file or directory should be ignored during sync.
+	// Called with the entry name (basename), full absolute path, whether it's a directory,
+	// the lstat information, and any lstat error.
+	// Return true to skip this entry, false to process it.
+	// If OnIgnore is nil, no entries are ignored by default.
+	OnIgnore func(name string, path string, isDir bool, fileInfo os.FileInfo, err error) bool
 }
 
 // Synchronizer syncs one directory tree to another.
@@ -390,9 +397,6 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	dstEntries, _ := os.ReadDir(dstAbsPath)
 	dstMap := make(map[string]os.DirEntry)
 	for _, entry := range dstEntries {
-		if entry.IsDir() && entry.Name() == ".snapshot" {
-			continue
-		}
 		dstMap[entry.Name()] = entry
 	}
 
@@ -400,15 +404,19 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	for _, srcEntry := range srcEntries {
 		srcName := srcEntry.Name()
 
-		// Skip special directories
-		if srcEntry.IsDir() && srcName == ".snapshot" {
-			continue
-		}
 
 		srcChildPath := filepath.Join(srcAbsPath, srcName)
 		dstChildPath := filepath.Join(dstAbsPath, srcName)
 
 		dstEntry, dstExists := dstMap[srcName]
+
+		// Check if entry should be ignored
+		srcInfo, err := os.Lstat(srcChildPath)
+		if w.synchronizer.callbacks.OnIgnore != nil {
+			if w.synchronizer.callbacks.OnIgnore(srcName, srcChildPath, srcEntry.IsDir(), srcInfo, err) {
+				continue
+			}
+		}
 
 		if srcEntry.IsDir() {
 			if dstExists && !dstEntry.IsDir() {

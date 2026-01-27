@@ -300,19 +300,68 @@ func (hc *hashCollector) HashBlock(blockID uint64, hash []byte) error {
     hashCopy := make([]byte, len(hash))
     copy(hashCopy, hash)
     hc.hashes[blockID] = hashCopy
+	- **OnIgnore** - Called to determine if a file/directory should be skipped (not synced)
     return nil
+	### Ignoring Files and Directories
 }
+	You can dynamically exclude files and directories from synchronization using the `OnIgnore` callback:
 
+	```go
+	package main
 // Use callback-based delivery
+	import (
+		"os"
+		"path/filepath"
+		"strings"
+		"csync"
+	)
 sync := NewSynchronizer(srcDir, dstDir, 4, false, Callbacks{})
+	func main() {
+		srcDir := "/source"
+		dstDir := "/destination"
+
+		callbacks := csync.Callbacks{
+			OnIgnore: func(name string, path string, isDir bool, fileInfo os.FileInfo, err error) bool {
+				if err != nil {
+					return false // Process on error
+				}
 collector := &hashCollector{hashes: make(map[uint64][]byte)}
+				// Ignore .snapshot directories
+				if isDir && name == ".snapshot" {
+					return true
+				}
 sync.copyFileWithHash(srcFile, dstFile, HashAlgoSHA256, collector)
+				// Ignore hidden files (starting with .)
+				if strings.HasPrefix(name, ".") && name != ".." {
+					return true
+				}
 ```
+				// Ignore temporary files
+				if strings.HasSuffix(name, ".tmp") {
+					return true
+				}
 
+				return false // Process this entry
+			},
+		}
 ### Key Points
+		sync := csync.NewSynchronizer(srcDir, dstDir, 4, false, callbacks)
+		if err := sync.Run(); err != nil {
+			panic(err)
+		}
+	}
+	```
 
+	The `OnIgnore` callback receives:
+	- `name` - The basename of the entry
+	- `path` - The absolute path to the entry
+	- `isDir` - Whether the entry is a directory
+	- `fileInfo` - File information from lstat (contains permissions, size, times, etc.)
+	- `err` - Any error from lstat (usually nil)
 - Producer and consumer maintain independent block ID counters starting from 0
+	Return `true` to skip the entry, `false` to process it.
 - Block IDs are sequential: 0, 1, 2, ...
+	### Custom Logger
 - Each block is up to 4096 bytes; partial blocks at file end are hashed as-is
 - Hash bytes should be copied by the consumer; the caller does not retain references
 - Callback errors are **blocking** and will abort the copy
@@ -512,6 +561,7 @@ type Callbacks struct {
 	OnChmod        func(path string, mode os.FileMode, err error)
 	OnChown        func(path string, uid, gid int, err error)
 	OnChtimes      func(path string, err error)
+	OnIgnore       func(name string, path string, isDir bool, fileInfo os.FileInfo, err error) bool
 }
 ```
 
