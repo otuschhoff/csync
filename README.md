@@ -43,6 +43,7 @@ csync --exclude .git --exclude node_modules --max-workers 8 /src /dst
 ```
 
 - `--verbose` prints each operation as it occurs.
+- In verbose mode, chmod/chown/chtimes logs include before/after values (modes, UID:GID, timestamps).
 - `--stats` renders a go-pretty table every 10s with cumulative and interval rates.
 - `--exclude <name>` skips entries whose base name matches; repeatable.
 - `--max-workers <n>` caps the worker pool (default 4).
@@ -132,9 +133,9 @@ The `Callbacks` struct provides optional hooks for:
 - **OnUnlink** - Called when removing a file or symlink
 - **OnRemoveAll** - Called when removing a directory tree
 - **OnSymlink** - Called when creating a symlink
-- **OnChmod** - Called when changing permissions (reserved)
-- **OnChown** - Called when changing ownership (reserved)
-- **OnChtimes** - Called when changing modification times (reserved)
+- **OnChmod** / **OnChmodDetail** - Called when changing permissions; detail includes before/after modes
+- **OnChown** / **OnChownDetail** - Called when changing ownership; detail includes old/new UID:GID
+- **OnChtimes** / **OnChtimesDetail** - Called when changing times; detail includes before/after times and which changed
 
 ### Custom Logger
 

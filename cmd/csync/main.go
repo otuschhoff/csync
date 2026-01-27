@@ -170,7 +170,7 @@ func main() {
 						stats.chmod.Add(1)
 					}
 					if verbose {
-						logMsg("chmod", fmt.Sprintf("%s (%s)", path, mode.String()), err)
+						logMsg("chmod", fmt.Sprintf("%s -> %s", path, mode.String()), err)
 					}
 				},
 				OnChown: func(path string, uid, gid int, err error) {
@@ -178,7 +178,7 @@ func main() {
 						stats.chown.Add(1)
 					}
 					if verbose {
-						logMsg("chown", fmt.Sprintf("%s (%d:%d)", path, uid, gid), err)
+						logMsg("chown", fmt.Sprintf("%s -> %d:%d", path, uid, gid), err)
 					}
 				},
 				OnChtimes: func(path string, err error) {
@@ -188,6 +188,35 @@ func main() {
 					if verbose {
 						logMsg("chtimes", path, err)
 					}
+				},
+				OnChmodDetail: func(path string, before, after os.FileMode, err error) {
+					if !verbose {
+						return
+					}
+					logMsg("chmod", fmt.Sprintf("%s: %s -> %s", path, before.String(), after.String()), err)
+				},
+				OnChownDetail: func(path string, oldUID, oldGID, newUID, newGID int, err error) {
+					if !verbose {
+						return
+					}
+					logMsg("chown", fmt.Sprintf("%s: %d:%d -> %d:%d", path, oldUID, oldGID, newUID, newGID), err)
+				},
+				OnChtimesDetail: func(path string, beforeAtime, beforeMtime, afterAtime, afterMtime time.Time, changedAtime, changedMtime bool, err error) {
+					if !verbose {
+						return
+					}
+					var changed []string
+					if changedAtime {
+						changed = append(changed, fmt.Sprintf("atime %s -> %s", beforeAtime.Format(time.RFC3339), afterAtime.Format(time.RFC3339)))
+					}
+					if changedMtime {
+						changed = append(changed, fmt.Sprintf("mtime %s -> %s", beforeMtime.Format(time.RFC3339), afterMtime.Format(time.RFC3339)))
+					}
+					if len(changed) == 0 {
+						logMsg("chtimes", fmt.Sprintf("%s: no time change", path), err)
+						return
+					}
+					logMsg("chtimes", fmt.Sprintf("%s: %s", path, strings.Join(changed, ", ")), err)
 				},
 			}
 

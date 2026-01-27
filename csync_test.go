@@ -951,3 +951,112 @@ func TestOnIgnoreCallback(t *testing.T) {
 		t.Errorf("OnIgnore callback was not called")
 	}
 }
+
+func TestSyncDetailCallbacks(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	srcFile := filepath.Join(srcDir, "file.txt")
+	dstFile := filepath.Join(dstDir, "file.txt")
+
+	if err := os.WriteFile(srcFile, []byte("data"), 0644); err != nil {
+		t.Fatalf("failed to write src file: %v", err)
+	}
+
+	// Set a known mod time on the source so we can compare after sync.
+	srcMod := time.Now().Add(-30 * time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(srcFile, srcMod, srcMod); err != nil {
+		t.Fatalf("failed to set src times: %v", err)
+	}
+
+	// Destination starts with different mode and older times.
+	if err := os.WriteFile(dstFile, []byte("data"), 0600); err != nil {
+		t.Fatalf("failed to write dst file: %v", err)
+	}
+	oldTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(dstFile, oldTime, oldTime); err != nil {
+		t.Fatalf("failed to set dst times: %v", err)
+	}
+
+	var (
+		chmodCalled   bool
+		chownCalled   bool
+		chtimesCalled bool
+
+		beforeMode os.FileMode
+		afterMode  os.FileMode
+
+		oldUID int
+		oldGID int
+		newUID int
+		newGID int
+
+		beforeAt time.Time
+		beforeMt time.Time
+		afterAt  time.Time
+		afterMt  time.Time
+		changedA bool
+		changedM bool
+	)
+
+	callbacks := Callbacks{
+		OnChmodDetail: func(path string, before, after os.FileMode, err error) {
+			chmodCalled = true
+			beforeMode = before
+			afterMode = after
+		},
+		OnChownDetail: func(path string, oUID, oGID, nUID, nGID int, err error) {
+			chownCalled = true
+			oldUID, oldGID, newUID, newGID = oUID, oGID, nUID, nGID
+		},
+		OnChtimesDetail: func(path string, bAt, bMt, aAt, aMt time.Time, cAt, cMt bool, err error) {
+			chtimesCalled = true
+			beforeAt, beforeMt, afterAt, afterMt = bAt, bMt, aAt, aMt
+			changedA, changedM = cAt, cMt
+		},
+	}
+
+	s := NewSynchronizer(srcDir, dstDir, 1, false, callbacks)
+	if err := s.Run(); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	if !chmodCalled {
+		t.Fatal("expected OnChmodDetail to be called")
+	}
+	if beforeMode != 0600 {
+		t.Fatalf("expected before mode 0600, got %v", beforeMode)
+	}
+	if afterMode != 0644 {
+		t.Fatalf("expected after mode 0644, got %v", afterMode)
+	}
+
+	if !chtimesCalled {
+		t.Fatal("expected OnChtimesDetail to be called")
+	}
+	if beforeAt.IsZero() {
+		t.Fatalf("expected before atime to be captured")
+	}
+	if beforeMt.IsZero() {
+		t.Fatalf("expected before mtime to be captured")
+	}
+	if !afterAt.Equal(srcMod) {
+		t.Fatalf("expected after atime %v, got %v", srcMod, afterAt)
+	}
+	if !afterMt.Equal(srcMod) {
+		t.Fatalf("expected after mtime %v, got %v", srcMod, afterMt)
+	}
+	if !changedM {
+		t.Fatalf("expected mtime change to be reported")
+	}
+	if !changedA {
+		t.Fatalf("expected atime change to be reported")
+	}
+
+	if !chownCalled {
+		t.Fatal("expected OnChownDetail to be called")
+	}
+	if newUID != oldUID || newGID != oldGID {
+		t.Fatalf("expected uid/gid to remain %d:%d, got %d:%d", oldUID, oldGID, newUID, newGID)
+	}
+}

@@ -43,6 +43,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 )
@@ -138,13 +139,23 @@ type Callbacks struct {
 	// Called with the path, new file mode, and any error.
 	OnChmod func(path string, mode os.FileMode, err error)
 
+	// OnChmodDetail is called when changing permissions, with both the previous and new mode.
+	OnChmodDetail func(path string, before, after os.FileMode, err error)
+
 	// OnChown is called when changing ownership.
 	// Called with the path, uid, gid, and any error.
 	OnChown func(path string, uid, gid int, err error)
 
+	// OnChownDetail is called when changing ownership with both the previous and new IDs.
+	OnChownDetail func(path string, oldUID, oldGID, newUID, newGID int, err error)
+
 	// OnChtimes is called when changing modification/access times.
 	// Called with the path and any error encountered.
 	OnChtimes func(path string, err error)
+
+	// OnChtimesDetail is called when changing times with both the previous and new atime/mtime
+	// and booleans indicating which times needed an update.
+	OnChtimesDetail func(path string, beforeAtime, beforeMtime, afterAtime, afterMtime time.Time, changedAtime, changedMtime bool, err error)
 
 	// OnIgnore is called to determine if a file or directory should be ignored during sync.
 	// Called with the entry name (basename), full absolute path, whether it's a directory,
@@ -404,7 +415,6 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	for _, srcEntry := range srcEntries {
 		srcName := srcEntry.Name()
 
-
 		srcChildPath := filepath.Join(srcAbsPath, srcName)
 		dstChildPath := filepath.Join(dstAbsPath, srcName)
 
@@ -535,6 +545,24 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 		return nil // Source doesn't exist, skip
 	}
 
+	var dstInfo os.FileInfo
+	dstInfo, _ = os.Lstat(dstPath)
+
+	var beforeMode os.FileMode
+	var beforeAtime, beforeMtime time.Time
+	var beforeUID, beforeGID int
+	if dstInfo != nil {
+		beforeMode = dstInfo.Mode().Perm()
+		if stat, ok := dstInfo.Sys().(*syscall.Stat_t); ok {
+			beforeUID = int(stat.Uid)
+			beforeGID = int(stat.Gid)
+			beforeAtime = time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
+			beforeMtime = time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
+		} else {
+			beforeMtime = dstInfo.ModTime()
+		}
+	}
+
 	// Sync permissions (mode)
 	mode := srcInfo.Mode().Perm()
 	if err := os.Chmod(dstPath, mode); err != nil {
@@ -543,8 +571,16 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 		if s.callbacks.OnChmod != nil {
 			s.callbacks.OnChmod(dstPath, mode, err)
 		}
-	} else if s.callbacks.OnChmod != nil {
-		s.callbacks.OnChmod(dstPath, mode, nil)
+		if s.callbacks.OnChmodDetail != nil {
+			s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, err)
+		}
+	} else {
+		if s.callbacks.OnChmod != nil {
+			s.callbacks.OnChmod(dstPath, mode, nil)
+		}
+		if s.callbacks.OnChmodDetail != nil {
+			s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, nil)
+		}
 	}
 
 	// Sync modification and access times
@@ -555,8 +591,16 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 		if s.callbacks.OnChtimes != nil {
 			s.callbacks.OnChtimes(dstPath, err)
 		}
-	} else if s.callbacks.OnChtimes != nil {
-		s.callbacks.OnChtimes(dstPath, nil)
+		if s.callbacks.OnChtimesDetail != nil {
+			s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, modTime, modTime, modTime != beforeAtime, modTime != beforeMtime, err)
+		}
+	} else {
+		if s.callbacks.OnChtimes != nil {
+			s.callbacks.OnChtimes(dstPath, nil)
+		}
+		if s.callbacks.OnChtimesDetail != nil {
+			s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, modTime, modTime, modTime != beforeAtime, modTime != beforeMtime, nil)
+		}
 	}
 
 	// Sync ownership (uid/gid) if possible
@@ -571,8 +615,16 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 			if s.callbacks.OnChown != nil {
 				s.callbacks.OnChown(dstPath, uid, gid, err)
 			}
-		} else if s.callbacks.OnChown != nil {
-			s.callbacks.OnChown(dstPath, uid, gid, nil)
+			if s.callbacks.OnChownDetail != nil {
+				s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, err)
+			}
+		} else {
+			if s.callbacks.OnChown != nil {
+				s.callbacks.OnChown(dstPath, uid, gid, nil)
+			}
+			if s.callbacks.OnChownDetail != nil {
+				s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, nil)
+			}
 		}
 	}
 
