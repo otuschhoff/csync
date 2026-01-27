@@ -18,6 +18,3 @@ updates:
     rebase-strategy: "auto"
     allow:
       - dependency-type: "all"
-    groups:
-      - dependency-type: "dev-dependencies"
-        dependency-type: "dependencies"
