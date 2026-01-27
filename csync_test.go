@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBasicSync tests basic file synchronization.
@@ -934,5 +935,132 @@ func TestBlockHashingAlgorithmComparison(t *testing.T) {
 	// xxHash should be very fast, but we just verify it produces different values
 	if bytes.Equal(sha256Hash[:8], xxHashHash) {
 		t.Logf("SHA256 and xxHash happen to match for this input (unlikely but possible)")
+	}
+}
+
+// TestPermissionsSync verifies file permissions are synced.
+func TestPermissionsSync(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a file with specific permissions
+	srcFile := filepath.Join(srcDir, "test.txt")
+	os.WriteFile(srcFile, []byte("content"), 0644)
+
+	// Change source permissions
+	os.Chmod(srcFile, 0755)
+
+	// Sync
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+	if err := sync.Run(); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	// Verify destination has same permissions
+	dstFile := filepath.Join(dstDir, "test.txt")
+	dstInfo, _ := os.Stat(dstFile)
+	dstPerm := dstInfo.Mode().Perm()
+
+	srcInfo, _ := os.Stat(srcFile)
+	srcPerm := srcInfo.Mode().Perm()
+
+	if srcPerm != dstPerm {
+		t.Errorf("permissions don't match: src=%o, dst=%o", srcPerm, dstPerm)
+	}
+}
+
+// TestModificationTimeSync verifies modification times are synced.
+func TestModificationTimeSync(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a file with current time
+	srcFile := filepath.Join(srcDir, "test.txt")
+	os.WriteFile(srcFile, []byte("content"), 0644)
+
+	// Set source to a specific past time
+	pastTime := time.Now().AddDate(-1, 0, 0) // 1 year ago
+	os.Chtimes(srcFile, pastTime, pastTime)
+
+	// Sync
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+	if err := sync.Run(); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	// Verify destination has same modification time (within 1 second tolerance)
+	dstFile := filepath.Join(dstDir, "test.txt")
+	dstInfo, _ := os.Stat(dstFile)
+	dstTime := dstInfo.ModTime()
+
+	srcInfo, _ := os.Stat(srcFile)
+	srcTime := srcInfo.ModTime()
+
+	timeDiff := srcTime.Sub(dstTime)
+	if timeDiff < -time.Second || timeDiff > time.Second {
+		t.Errorf("modification times don't match: src=%v, dst=%v, diff=%v", srcTime, dstTime, timeDiff)
+	}
+}
+
+// TestSymlinkTargetSync verifies symlink targets are verified and synced.
+func TestSymlinkTargetSync(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a symlink in source
+	srcFile := filepath.Join(srcDir, "target.txt")
+	os.WriteFile(srcFile, []byte("target content"), 0644)
+
+	srcLink := filepath.Join(srcDir, "link.txt")
+	os.Symlink("target.txt", srcLink)
+
+	// Sync
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+	if err := sync.Run(); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	// Verify destination symlink has same target
+	dstLink := filepath.Join(dstDir, "link.txt")
+	dstTarget, err := os.Readlink(dstLink)
+	if err != nil {
+		t.Fatalf("failed to read destination symlink: %v", err)
+	}
+
+	srcTarget, _ := os.Readlink(srcLink)
+
+	if srcTarget != dstTarget {
+		t.Errorf("symlink targets don't match: src=%s, dst=%s", srcTarget, dstTarget)
+	}
+}
+
+// TestSymlinkTargetMismatchRecreate verifies mismatched symlink targets are recreated.
+func TestSymlinkTargetMismatchRecreate(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create symlink in source
+	srcLink := filepath.Join(srcDir, "link.txt")
+	os.Symlink("target1.txt", srcLink)
+
+	// Create directory structure in destination with wrong symlink
+	os.Mkdir(filepath.Join(dstDir), 0755)
+	dstLink := filepath.Join(dstDir, "link.txt")
+	os.Symlink("target2.txt", dstLink) // Wrong target
+
+	// Sync
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+	if err := sync.Run(); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	// Verify symlink was recreated with correct target
+	dstTarget, err := os.Readlink(dstLink)
+	if err != nil {
+		t.Fatalf("failed to read destination symlink: %v", err)
+	}
+
+	if dstTarget != "target1.txt" {
+		t.Errorf("symlink target should be 'target1.txt', got '%s'", dstTarget)
 	}
 }

@@ -42,6 +42,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/cespare/xxhash/v2"
 )
@@ -430,6 +431,13 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 					if w.synchronizer.callbacks.OnMkdir != nil {
 						w.synchronizer.callbacks.OnMkdir(dstChildPath, mode, err)
 					}
+					// Sync inode attributes
+					w.synchronizer.syncInodeAttrs(srcChildPath, dstChildPath)
+				}
+			} else {
+				// Directory exists, sync inode attributes
+				if !w.synchronizer.readOnly {
+					w.synchronizer.syncInodeAttrs(srcChildPath, dstChildPath)
 				}
 			}
 
@@ -486,7 +494,12 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 					if w.synchronizer.callbacks.OnCopy != nil {
 						w.synchronizer.callbacks.OnCopy(srcChildPath, dstChildPath, srcInfo.Size(), err)
 					}
+					// Sync inode attributes after copy
+					w.synchronizer.syncInodeAttrs(srcChildPath, dstChildPath)
 				}
+			} else if dstExists && !w.synchronizer.readOnly {
+				// File exists but wasn't copied, still sync inode attributes
+				w.synchronizer.syncInodeAttrs(srcChildPath, dstChildPath)
 			}
 		}
 
@@ -501,6 +514,48 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			w.synchronizer.removeAll(dstChildPath)
 		} else {
 			w.synchronizer.unlink(dstChildPath)
+		}
+	}
+
+	return nil
+}
+
+// syncInodeAttrs synchronizes file inode attributes (permissions, ownership, times).
+// It syncs mode, uid/gid, and modification/access times from source to destination.
+// Errors are non-fatal and logged but do not abort the sync.
+func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
+	if s.readOnly {
+		return nil
+	}
+
+	srcInfo, err := os.Lstat(srcPath)
+	if err != nil {
+		return nil // Source doesn't exist, skip
+	}
+
+	// Sync permissions (mode)
+	mode := srcInfo.Mode().Perm()
+	if err := os.Chmod(dstPath, mode); err != nil {
+		// Log but don't fail
+		s.logger.Printf("WARN: failed to chmod %s: %v\n", dstPath, err)
+	}
+
+	// Sync modification and access times
+	modTime := srcInfo.ModTime()
+	if err := os.Chtimes(dstPath, modTime, modTime); err != nil {
+		// Log but don't fail
+		s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
+	}
+
+	// Sync ownership (uid/gid) if possible
+	// Note: This requires appropriate permissions (usually root)
+	stat := srcInfo.Sys().(*syscall.Stat_t)
+	if stat != nil {
+		uid := int(stat.Uid)
+		gid := int(stat.Gid)
+		if err := os.Chown(dstPath, uid, gid); err != nil {
+			// Log but don't fail (non-root users typically can't chown)
+			s.logger.Printf("DEBUG: failed to chown %s to %d:%d: %v\n", dstPath, uid, gid, err)
 		}
 	}
 

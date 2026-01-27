@@ -385,14 +385,37 @@ fmt.Printf("Callback collected: %d blocks\n", len(collector.hashes))
   - `hasher`: Optional callback to receive block hashes (can be nil)
   - `hashChan`: Optional channel to receive BlockHash values (can be nil, non-blocking sends)
 
+## Inode Attribute Syncing
+
+During synchronization, csync automatically syncs inode attributes from source to destination:
+
+### Synced Attributes
+
+- **Permissions** - File and directory mode/permissions are synced via `chmod`
+- **Modification/Access Times** - File timestamps are synced via `chtimes`
+- **Ownership** - UID/GID are synced via `chown` (requires appropriate permissions, typically root)
+- **Symlink Targets** - Symlink targets are verified to match; mismatches trigger recreation
+
+### How It Works
+
+1. **Directories**: Permissions and times are synced after creation and on every pass
+2. **Files**: Permissions and times are synced after copy
+3. **Symlinks**: Targets are verified on each pass; mismatched targets cause the symlink to be removed and recreated
+4. **Errors**: Inode syncing errors (permissions, chown failures) are logged as warnings/debug but do not abort the sync
+
+### Special Cases
+
+- **Ownership (chown)**: Non-root users typically cannot change ownership of files they don't own. Errors are logged at DEBUG level and ignored.
+- **Permissions**: Always synced when possible; failures are logged at WARN level.
+- **Times**: Synced with nanosecond precision when supported by the filesystem.
+
 ## Limitations
 
-- Does not copy file permissions beyond directory mode bits
-- Does not copy file ownership (uid/gid)
-- Does not copy extended attributes
-- Does not copy modification times on copied files
-- Symlink targets are not validated
+- Does not copy extended attributes (xattr)
 - Hard links are treated as separate files
+- ACLs are not synchronized
+- SELinux contexts are not synchronized
+- File capabilities are not synchronized
 
 ## License
 
