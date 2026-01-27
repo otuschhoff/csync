@@ -276,11 +276,7 @@ For file integrity verification, csync supports optional block-based hashing dur
 
 ### Using Block Hashing
 
-Hashes can be received via callback interface, channel, or both simultaneously:
-
-#### Callback-Based Delivery
-
-Implement the `BlockHasher` interface to receive hash values:
+Block hashing is delivered via callback interface. Implement the `BlockHasher` interface to receive hash values:
 
 ```go
 type BlockHasher interface {
@@ -313,55 +309,12 @@ collector := &hashCollector{hashes: make(map[uint64][]byte)}
 sync.copyFileWithHash(srcFile, dstFile, HashAlgoSHA256, collector)
 ```
 
-#### Channel-Based Delivery
-
-Receive hashes via a channel for decoupled processing:
-
-```go
-// Create buffered channel for block hashes
-hashChan := make(chan BlockHash, 100)
-defer close(hashChan)
-
-// Copy with channel-based delivery
-sync := NewSynchronizer(srcDir, dstDir, 4, false, Callbacks{})
-go func() {
-    err := sync.copyFileWithHashChannel(srcFile, dstFile, HashAlgoSHA256, nil, hashChan)
-    if err != nil {
-        log.Fatalf("copy failed: %v", err)
-    }
-}()
-
-// Receive hashes from channel
-for blockHash := range hashChan {
-    fmt.Printf("Block %d: %x\n", blockHash.BlockID, blockHash.Hash)
-}
-```
-
-#### Dual Delivery (Callback + Channel)
-
-Receive hashes via both mechanisms simultaneously:
-
-```go
-hashChan := make(chan BlockHash, 100)
-defer close(hashChan)
-
-collector := &hashCollector{hashes: make(map[uint64][]byte)}
-
-// Both callback and channel will receive all hashes
-sync := NewSynchronizer(srcDir, dstDir, 4, false, Callbacks{})
-err := sync.copyFileWithHashChannel(srcFile, dstFile, HashAlgoSHA256, collector, hashChan)
-
-// Process from either or both sources
-fmt.Printf("Callback collected: %d blocks\n", len(collector.hashes))
-```
-
 ### Key Points
 
-- Both producer (copy) and consumer maintain independent block ID counters starting from 0
+- Producer and consumer maintain independent block ID counters starting from 0
 - Block IDs are sequential: 0, 1, 2, ...
 - Each block is up to 4096 bytes; partial blocks at file end are hashed as-is
 - Hash bytes should be copied by the consumer; the caller does not retain references
-- Channel sends are **non-blocking**; if the channel is full, sends are skipped
 - Callback errors are **blocking** and will abort the copy
 - Hashing adds minimal overhead; use `HashAlgoNone` for the fastest copy
 
@@ -395,10 +348,6 @@ fmt.Printf("Callback collected: %d blocks\n", len(collector.hashes))
 - **`copyFileWithHash(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher) error`** - Copy file with callback-based block hashing
   - `algo`: Hash algorithm to use (HashAlgoNone to disable)
   - `hasher`: Callback to receive block hashes (can be nil if algo is HashAlgoNone)
-- **`copyFileWithHashChannel(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher, hashChan chan<- BlockHash) error`** - Copy file with callback and/or channel-based hashing
-  - `algo`: Hash algorithm to use (HashAlgoNone to disable)
-  - `hasher`: Optional callback to receive block hashes (can be nil)
-  - `hashChan`: Optional channel to receive BlockHash values (can be nil, non-blocking sends)
 
 ## Inode Attribute Syncing
 
@@ -545,7 +494,6 @@ type Synchronizer struct {
 - `Run() error` - Start synchronization and block until complete
 - `Stop()` - Cancel synchronization gracefully
 - `copyFileWithHash(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher) error` - Copy a file with optional block hashing using callback
-- `copyFileWithHashChannel(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher, hashChan chan<- BlockHash) error` - Copy a file with optional hashing via callback and/or channel
 
 #### Callbacks
 
@@ -564,7 +512,6 @@ type Callbacks struct {
 	OnChmod        func(path string, mode os.FileMode, err error)
 	OnChown        func(path string, uid, gid int, err error)
 	OnChtimes      func(path string, err error)
-	OnFileCopyHash func(srcPath, dstPath string, blockHash BlockHash)
 }
 ```
 
@@ -693,27 +640,6 @@ func (s *Synchronizer) copyFileWithHash(srcPath, dstPath string, algo HashAlgo, 
 - `hasher` - BlockHasher implementation for callback-based delivery; can be nil
 
 **Returns:** Error if copy fails or hasher returns error, nil on success
-
-#### copyFileWithHashChannel
-
-Copy a file with optional block hashing via callback, channel, or both.
-
-```go
-func (s *Synchronizer) copyFileWithHashChannel(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher, hashChan chan<- BlockHash) error
-```
-
-**Parameters:**
-- `srcPath` - Source file path
-- `dstPath` - Destination file path
-- `algo` - Hash algorithm (HashAlgoNone to disable)
-- `hasher` - BlockHasher implementation for callback-based delivery; can be nil
-- `hashChan` - Channel for hash delivery; can be nil
-  - Sends are non-blocking; if channel is full, sends are skipped
-  - Close the channel on your side after copy completes
-
-**Returns:** Error if copy fails or hasher returns error, nil on success
-
-**Note:** Both hasher callback and hashChan will receive the same block hashes if both are provided.
 
 ### Behavior Details
 
