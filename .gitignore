@@ -1,0 +1,38 @@
+# Vim temporary files
+*.swp
+*.swo
+*~
+.*.swp
+.*.swo
+.*~
+
+# Vim session files
+.Session.vim
+.exrc
+.vimrc
+
+# Vim swap files
+.*.s[a-w][a-z]
+*.un~
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+
+# Build outputs
+*.o
+*.a
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Go build cache
+.cache/
+
+# Go mod cache
+vendor/

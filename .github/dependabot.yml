@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Enable version updates for Go dependencies
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    reviewers:
+      - "Oliver Tuschhoff"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps):"
+    pull-request-branch-name:
+      separator: "/"
+    rebase-strategy: "auto"
+    allow:
+      - dependency-type: "all"
+    groups:
+      - dependency-type: "dev-dependencies"
+        dependency-type: "dependencies"
