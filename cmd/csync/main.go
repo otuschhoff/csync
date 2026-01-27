@@ -370,7 +370,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	})
 	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)")})
 
-	for i, r := range rows {
+	for _, r := range rows {
 		if r.total == 0 {
 			continue
 		}
