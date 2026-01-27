@@ -36,3 +36,4 @@
 
 # Go mod cache
 vendor/
+csync
