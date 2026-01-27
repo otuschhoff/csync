@@ -322,6 +322,7 @@ func TestCobraCommandBasic(t *testing.T) {
 	var statsFlag bool
 	var logOps []string
 	var noLogOps []string
+	var showWorkers bool
 
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose mode")
 	cmd.Flags().IntVar(&workers, "max-workers", 4, "max workers")
@@ -329,6 +330,7 @@ func TestCobraCommandBasic(t *testing.T) {
 	cmd.Flags().BoolVar(&statsFlag, "stats", false, "stats mode")
 	cmd.Flags().StringArrayVar(&logOps, "log-op", nil, "log-op")
 	cmd.Flags().StringArrayVar(&noLogOps, "no-log-op", nil, "no-log-op")
+	cmd.Flags().BoolVar(&showWorkers, "show-workers", false, "show workers")
 
 	// Parse some arguments
 	cmd.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat,readdir", "--no-log-op", "copy"})
@@ -346,9 +348,10 @@ func TestCobraCommandBasic(t *testing.T) {
 	cmd2.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude")
 	cmd2.Flags().StringArrayVar(&logOps, "log-op", nil, "log-op")
 	cmd2.Flags().StringArrayVar(&noLogOps, "no-log-op", nil, "no-log-op")
+	cmd2.Flags().BoolVar(&showWorkers, "show-workers", false, "show workers")
 
-	cmd2.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat", "--no-log-op", "copy"})
-	err = cmd2.ParseFlags([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat", "--no-log-op", "copy"})
+	cmd2.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat", "--no-log-op", "copy", "--show-workers"})
+	err = cmd2.ParseFlags([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat", "--no-log-op", "copy", "--show-workers"})
 	if err != nil {
 		t.Errorf("failed to parse flags: %v", err)
 	}
@@ -367,6 +370,9 @@ func TestCobraCommandBasic(t *testing.T) {
 	}
 	if len(noLogOps) != 1 || noLogOps[0] != "copy" {
 		t.Errorf("expected no-log-op copy, got %v", noLogOps)
+	}
+	if !showWorkers {
+		t.Error("show-workers flag not set")
 	}
 }
 

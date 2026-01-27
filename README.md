@@ -51,6 +51,7 @@ csync --verbose --log-op lstat,readdir --no-log-op copy /src /dst
 - `--exclude <name>` skips entries whose base name matches; repeatable.
 - `--max-workers <n>` caps the worker pool (default 4).
 - `--ignore-atime` ignores atime differences when syncing times, preserving destination atime when possible.
+- `--show-workers` prints detected CPUs and the configured worker pool size at start.
 
 ## Usage
 

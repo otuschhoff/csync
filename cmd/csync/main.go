@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -71,6 +72,7 @@ func main() {
 	var logOpsFlag []string
 	var noLogOpsFlag []string
 	var ignoreAtime bool
+	var showWorkers bool
 
 	rootCmd := &cobra.Command{
 		Use:   "csync <src> <dst>",
@@ -86,6 +88,10 @@ func main() {
 			dst := args[1]
 			if workers <= 0 {
 				return fmt.Errorf("max-workers must be >= 1")
+			}
+
+			if showWorkers {
+				fmt.Printf("workers: cpus=%d max-workers=%d\n", runtime.NumCPU(), workers)
 			}
 
 			excludeSet := make(map[string]struct{}, len(excludes))
@@ -278,6 +284,7 @@ func main() {
 	rootCmd.Flags().StringArrayVar(&logOpsFlag, "log-op", nil, "include additional operations in verbose output (comma-separated or repeatable)")
 	rootCmd.Flags().StringArrayVar(&noLogOpsFlag, "no-log-op", nil, "exclude operations from verbose output (comma-separated or repeatable)")
 	rootCmd.Flags().BoolVar(&ignoreAtime, "ignore-atime", false, "ignore atime differences when syncing times (preserve existing atime)")
+	rootCmd.Flags().BoolVar(&showWorkers, "show-workers", false, "print detected CPUs and max worker count at start")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
