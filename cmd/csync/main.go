@@ -68,6 +68,8 @@ func main() {
 	var statsFlag bool
 	var workers int
 	var excludes []string
+	var logOpsFlag []string
+	var noLogOpsFlag []string
 
 	rootCmd := &cobra.Command{
 		Use:   "csync <src> <dst>",
@@ -93,13 +95,44 @@ func main() {
 			stats := &statsCollector{}
 			start := time.Now()
 
+			logOps := map[string]bool{
+				"mkdir":     true,
+				"unlink":    true,
+				"removeall": true,
+				"symlink":   true,
+				"chmod":     true,
+				"chown":     true,
+				"chtimes":   true,
+				"copy":      true,
+			}
+			applyOps := func(list []string, val bool) {
+				for _, entry := range list {
+					for _, op := range strings.Split(entry, ",") {
+						op = strings.ToLower(strings.TrimSpace(op))
+						if op == "" {
+							continue
+						}
+						logOps[op] = val
+					}
+				}
+			}
+			applyOps(logOpsFlag, true)
+			applyOps(noLogOpsFlag, false)
+			shouldLog := func(op string) bool {
+				if !verbose {
+					return false
+				}
+				v, ok := logOps[strings.ToLower(op)]
+				return ok && v
+			}
+
 			callbacks := csync.Callbacks{
 				OnIgnore: func(name string, path string, isDir bool, fileInfo os.FileInfo, err error) bool {
 					if err != nil {
 						return false
 					}
 					if _, ok := excludeSet[name]; ok {
-						if verbose {
+						if shouldLog("ignore") {
 							logMsg("ignore", path, nil)
 						}
 						return true
@@ -110,7 +143,7 @@ func main() {
 					if err == nil {
 						stats.lstat.Add(1)
 					}
-					if verbose {
+					if shouldLog("lstat") {
 						logMsg("lstat", path, err)
 					}
 				},
@@ -118,7 +151,7 @@ func main() {
 					if err == nil {
 						stats.readdir.Add(1)
 					}
-					if verbose {
+					if shouldLog("readdir") {
 						logMsg("readdir", fmt.Sprintf("%s (%d entries)", path, len(entries)), err)
 					}
 				},
@@ -129,7 +162,7 @@ func main() {
 							stats.bytes.Add(uint64(size))
 						}
 					}
-					if verbose {
+					if shouldLog("copy") {
 						logMsg("copy", fmt.Sprintf("%s -> %s (%s)", srcPath, dstPath, formatBytes(uint64(size))), err)
 					}
 				},
@@ -137,7 +170,7 @@ func main() {
 					if err == nil {
 						stats.mkdir.Add(1)
 					}
-					if verbose {
+					if shouldLog("mkdir") {
 						logMsg("mkdir", fmt.Sprintf("%s (%s)", path, mode.String()), err)
 					}
 				},
@@ -145,7 +178,7 @@ func main() {
 					if err == nil {
 						stats.unlink.Add(1)
 					}
-					if verbose {
+					if shouldLog("unlink") {
 						logMsg("unlink", path, err)
 					}
 				},
@@ -153,7 +186,7 @@ func main() {
 					if err == nil {
 						stats.removeAll.Add(1)
 					}
-					if verbose {
+					if shouldLog("removeall") {
 						logMsg("removeall", path, err)
 					}
 				},
@@ -161,7 +194,7 @@ func main() {
 					if err == nil {
 						stats.symlink.Add(1)
 					}
-					if verbose {
+					if shouldLog("symlink") {
 						logMsg("symlink", fmt.Sprintf("%s -> %s", linkPath, target), err)
 					}
 				},
@@ -169,7 +202,7 @@ func main() {
 					if err == nil {
 						stats.chmod.Add(1)
 					}
-					if verbose {
+					if shouldLog("chmod") {
 						logMsg("chmod", fmt.Sprintf("%s -> %s", path, mode.String()), err)
 					}
 				},
@@ -177,7 +210,7 @@ func main() {
 					if err == nil {
 						stats.chown.Add(1)
 					}
-					if verbose {
+					if shouldLog("chown") {
 						logMsg("chown", fmt.Sprintf("%s -> %d:%d", path, uid, gid), err)
 					}
 				},
@@ -185,24 +218,24 @@ func main() {
 					if err == nil {
 						stats.chtimes.Add(1)
 					}
-					if verbose {
+					if shouldLog("chtimes") {
 						logMsg("chtimes", path, err)
 					}
 				},
 				OnChmodDetail: func(path string, before, after os.FileMode, err error) {
-					if !verbose {
+					if !shouldLog("chmod") {
 						return
 					}
 					logMsg("chmod", fmt.Sprintf("%s: %s -> %s", path, before.String(), after.String()), err)
 				},
 				OnChownDetail: func(path string, oldUID, oldGID, newUID, newGID int, err error) {
-					if !verbose {
+					if !shouldLog("chown") {
 						return
 					}
 					logMsg("chown", fmt.Sprintf("%s: %d:%d -> %d:%d", path, oldUID, oldGID, newUID, newGID), err)
 				},
 				OnChtimesDetail: func(path string, beforeAtime, beforeMtime, afterAtime, afterMtime time.Time, changedAtime, changedMtime bool, err error) {
-					if !verbose {
+					if !shouldLog("chtimes") {
 						return
 					}
 					var changed []string
@@ -240,6 +273,8 @@ func main() {
 	rootCmd.Flags().BoolVar(&statsFlag, "stats", false, "print stats every 10s during sync")
 	rootCmd.Flags().IntVar(&workers, "max-workers", 4, "maximum number of concurrent workers (>=1)")
 	rootCmd.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude entries whose base name matches (repeatable)")
+	rootCmd.Flags().StringArrayVar(&logOpsFlag, "log-op", nil, "include additional operations in verbose output (comma-separated or repeatable)")
+	rootCmd.Flags().StringArrayVar(&noLogOpsFlag, "no-log-op", nil, "exclude operations from verbose output (comma-separated or repeatable)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

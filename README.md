@@ -40,9 +40,12 @@ go install ./cmd/csync
 csync --help
 csync --verbose --stats /src/path /dst/path
 csync --exclude .git --exclude node_modules --max-workers 8 /src /dst
+csync --verbose --log-op lstat,readdir --no-log-op copy /src /dst
 ```
 
-- `--verbose` prints each operation as it occurs.
+- `--verbose` prints operations; defaults to change ops (mkdir, unlink, removeall, symlink, chmod, chown, chtimes, copy).
+- `--log-op <op>` adds operations to verbose output (comma-separated or repeatable). Examples: `lstat`, `readdir`, `ignore`.
+- `--no-log-op <op>` removes operations from verbose output (comma-separated or repeatable).
 - In verbose mode, chmod/chown/chtimes logs include before/after values (modes, UID:GID, timestamps).
 - `--stats` renders a go-pretty table every 10s with cumulative and interval rates.
 - `--exclude <name>` skips entries whose base name matches; repeatable.

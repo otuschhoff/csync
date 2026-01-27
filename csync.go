@@ -565,41 +565,47 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 
 	// Sync permissions (mode)
 	mode := srcInfo.Mode().Perm()
-	if err := os.Chmod(dstPath, mode); err != nil {
-		// Log but don't fail
-		s.logger.Printf("WARN: failed to chmod %s: %v\n", dstPath, err)
-		if s.callbacks.OnChmod != nil {
-			s.callbacks.OnChmod(dstPath, mode, err)
-		}
-		if s.callbacks.OnChmodDetail != nil {
-			s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, err)
-		}
-	} else {
-		if s.callbacks.OnChmod != nil {
-			s.callbacks.OnChmod(dstPath, mode, nil)
-		}
-		if s.callbacks.OnChmodDetail != nil {
-			s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, nil)
+	if beforeMode != mode {
+		if err := os.Chmod(dstPath, mode); err != nil {
+			// Log but don't fail
+			s.logger.Printf("WARN: failed to chmod %s: %v\n", dstPath, err)
+			if s.callbacks.OnChmod != nil {
+				s.callbacks.OnChmod(dstPath, mode, err)
+			}
+			if s.callbacks.OnChmodDetail != nil {
+				s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, err)
+			}
+		} else {
+			if s.callbacks.OnChmod != nil {
+				s.callbacks.OnChmod(dstPath, mode, nil)
+			}
+			if s.callbacks.OnChmodDetail != nil {
+				s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, nil)
+			}
 		}
 	}
 
 	// Sync modification and access times
 	modTime := srcInfo.ModTime()
-	if err := os.Chtimes(dstPath, modTime, modTime); err != nil {
-		// Log but don't fail
-		s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
-		if s.callbacks.OnChtimes != nil {
-			s.callbacks.OnChtimes(dstPath, err)
-		}
-		if s.callbacks.OnChtimesDetail != nil {
-			s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, modTime, modTime, modTime != beforeAtime, modTime != beforeMtime, err)
-		}
-	} else {
-		if s.callbacks.OnChtimes != nil {
-			s.callbacks.OnChtimes(dstPath, nil)
-		}
-		if s.callbacks.OnChtimesDetail != nil {
-			s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, modTime, modTime, modTime != beforeAtime, modTime != beforeMtime, nil)
+	changedAtime := beforeAtime.IsZero() || !beforeAtime.Equal(modTime)
+	changedMtime := beforeMtime.IsZero() || !beforeMtime.Equal(modTime)
+	if changedAtime || changedMtime {
+		if err := os.Chtimes(dstPath, modTime, modTime); err != nil {
+			// Log but don't fail
+			s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
+			if s.callbacks.OnChtimes != nil {
+				s.callbacks.OnChtimes(dstPath, err)
+			}
+			if s.callbacks.OnChtimesDetail != nil {
+				s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, modTime, modTime, changedAtime, changedMtime, err)
+			}
+		} else {
+			if s.callbacks.OnChtimes != nil {
+				s.callbacks.OnChtimes(dstPath, nil)
+			}
+			if s.callbacks.OnChtimesDetail != nil {
+				s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, modTime, modTime, changedAtime, changedMtime, nil)
+			}
 		}
 	}
 
@@ -609,21 +615,23 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 	if stat != nil {
 		uid := int(stat.Uid)
 		gid := int(stat.Gid)
-		if err := os.Chown(dstPath, uid, gid); err != nil {
-			// Log but don't fail (non-root users typically can't chown)
-			s.logger.Printf("DEBUG: failed to chown %s to %d:%d: %v\n", dstPath, uid, gid, err)
-			if s.callbacks.OnChown != nil {
-				s.callbacks.OnChown(dstPath, uid, gid, err)
-			}
-			if s.callbacks.OnChownDetail != nil {
-				s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, err)
-			}
-		} else {
-			if s.callbacks.OnChown != nil {
-				s.callbacks.OnChown(dstPath, uid, gid, nil)
-			}
-			if s.callbacks.OnChownDetail != nil {
-				s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, nil)
+		if beforeUID != uid || beforeGID != gid {
+			if err := os.Chown(dstPath, uid, gid); err != nil {
+				// Log but don't fail (non-root users typically can't chown)
+				s.logger.Printf("DEBUG: failed to chown %s to %d:%d: %v\n", dstPath, uid, gid, err)
+				if s.callbacks.OnChown != nil {
+					s.callbacks.OnChown(dstPath, uid, gid, err)
+				}
+				if s.callbacks.OnChownDetail != nil {
+					s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, err)
+				}
+			} else {
+				if s.callbacks.OnChown != nil {
+					s.callbacks.OnChown(dstPath, uid, gid, nil)
+				}
+				if s.callbacks.OnChownDetail != nil {
+					s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, nil)
+				}
 			}
 		}
 	}

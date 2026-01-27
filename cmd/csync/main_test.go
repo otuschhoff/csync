@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spf13/cobra"
 	"csync"
+	"github.com/spf13/cobra"
 )
 
 func TestBasicSync(t *testing.T) {
@@ -258,14 +258,18 @@ func TestCobraCommandBasic(t *testing.T) {
 	var workers int
 	var excludes []string
 	var statsFlag bool
+	var logOps []string
+	var noLogOps []string
 
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose mode")
 	cmd.Flags().IntVar(&workers, "max-workers", 4, "max workers")
 	cmd.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude")
 	cmd.Flags().BoolVar(&statsFlag, "stats", false, "stats mode")
+	cmd.Flags().StringArrayVar(&logOps, "log-op", nil, "log-op")
+	cmd.Flags().StringArrayVar(&noLogOps, "no-log-op", nil, "no-log-op")
 
 	// Parse some arguments
-	cmd.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules"})
+	cmd.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat,readdir", "--no-log-op", "copy"})
 	err := cmd.Execute()
 
 	// Since we didn't set a RunE, this will return an error for missing command, but flags should parse
@@ -278,9 +282,11 @@ func TestCobraCommandBasic(t *testing.T) {
 	cmd2.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose mode")
 	cmd2.Flags().IntVar(&workers, "max-workers", 4, "max workers")
 	cmd2.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude")
+	cmd2.Flags().StringArrayVar(&logOps, "log-op", nil, "log-op")
+	cmd2.Flags().StringArrayVar(&noLogOps, "no-log-op", nil, "no-log-op")
 
-	cmd2.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules"})
-	err = cmd2.ParseFlags([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules"})
+	cmd2.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat", "--no-log-op", "copy"})
+	err = cmd2.ParseFlags([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat", "--no-log-op", "copy"})
 	if err != nil {
 		t.Errorf("failed to parse flags: %v", err)
 	}
@@ -293,6 +299,12 @@ func TestCobraCommandBasic(t *testing.T) {
 	}
 	if len(excludes) != 2 || excludes[0] != ".git" || excludes[1] != "node_modules" {
 		t.Errorf("expected excludes=[.git, node_modules], got %v", excludes)
+	}
+	if len(logOps) != 1 || logOps[0] != "lstat" {
+		t.Errorf("expected log-op lstat, got %v", logOps)
+	}
+	if len(noLogOps) != 1 || noLogOps[0] != "copy" {
+		t.Errorf("expected no-log-op copy, got %v", noLogOps)
 	}
 }
 

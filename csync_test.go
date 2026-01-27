@@ -986,11 +986,6 @@ func TestSyncDetailCallbacks(t *testing.T) {
 		beforeMode os.FileMode
 		afterMode  os.FileMode
 
-		oldUID int
-		oldGID int
-		newUID int
-		newGID int
-
 		beforeAt time.Time
 		beforeMt time.Time
 		afterAt  time.Time
@@ -1007,7 +1002,6 @@ func TestSyncDetailCallbacks(t *testing.T) {
 		},
 		OnChownDetail: func(path string, oUID, oGID, nUID, nGID int, err error) {
 			chownCalled = true
-			oldUID, oldGID, newUID, newGID = oUID, oGID, nUID, nGID
 		},
 		OnChtimesDetail: func(path string, bAt, bMt, aAt, aMt time.Time, cAt, cMt bool, err error) {
 			chtimesCalled = true
@@ -1053,10 +1047,7 @@ func TestSyncDetailCallbacks(t *testing.T) {
 		t.Fatalf("expected atime change to be reported")
 	}
 
-	if !chownCalled {
-		t.Fatal("expected OnChownDetail to be called")
-	}
-	if newUID != oldUID || newGID != oldGID {
-		t.Fatalf("expected uid/gid to remain %d:%d, got %d:%d", oldUID, oldGID, newUID, newGID)
+	if chownCalled {
+		t.Fatal("expected OnChownDetail not to be called when ownership is unchanged")
 	}
 }
