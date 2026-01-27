@@ -334,7 +334,7 @@ func TestCobraCommandBasic(t *testing.T) {
 	cmd.Flags().BoolVar(&showWorkers, "show-workers", false, "show workers")
 
 	// Parse some arguments
-	cmd.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat,readdir", "--no-log-op", "copy"})
+	cmd.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy"})
 	err := cmd.Execute()
 
 	// Since we didn't set a RunE, this will return an error for missing command, but flags should parse
@@ -351,8 +351,8 @@ func TestCobraCommandBasic(t *testing.T) {
 	cmd2.Flags().StringArrayVar(&noLogOps, "no-log-op", nil, "no-log-op")
 	cmd2.Flags().BoolVar(&showWorkers, "show-workers", false, "show workers")
 
-	cmd2.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat", "--no-log-op", "copy", "--show-workers"})
-	err = cmd2.ParseFlags([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "lstat", "--no-log-op", "copy", "--show-workers"})
+	cmd2.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy", "--show-workers"})
+	err = cmd2.ParseFlags([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy", "--show-workers"})
 	if err != nil {
 		t.Errorf("failed to parse flags: %v", err)
 	}
@@ -366,8 +366,8 @@ func TestCobraCommandBasic(t *testing.T) {
 	if len(excludes) != 2 || excludes[0] != ".git" || excludes[1] != "node_modules" {
 		t.Errorf("expected excludes=[.git, node_modules], got %v", excludes)
 	}
-	if len(logOps) != 1 || logOps[0] != "lstat" {
-		t.Errorf("expected log-op lstat, got %v", logOps)
+	if len(logOps) != 1 || logOps[0] != "readdir" {
+		t.Errorf("expected log-op readdir, got %v", logOps)
 	}
 	if len(noLogOps) != 1 || noLogOps[0] != "copy" {
 		t.Errorf("expected no-log-op copy, got %v", noLogOps)

@@ -102,7 +102,7 @@ func (dl *defaultLogger) Printf(format string, v ...interface{}) {
 // Callbacks are called during various stages of the synchronization process
 // and can be used for logging, monitoring, or custom handling of sync events.
 type Callbacks struct {
-	// OnLstat is called after lstat operations on both source and destination.
+	// OnLstat is called for each source entry discovered via ReadDir (using entry.Info()).
 	// Called with the path being examined, whether it's a directory, file info, and any error.
 	OnLstat func(path string, isDir bool, fileInfo os.FileInfo, err error)
 
@@ -159,7 +159,7 @@ type Callbacks struct {
 
 	// OnIgnore is called to determine if a file or directory should be ignored during sync.
 	// Called with the entry name (basename), full absolute path, whether it's a directory,
-	// the lstat information, and any lstat error.
+	// the stat information (from entry.Info or Lstat), and any stat error.
 	// Return true to skip this entry, false to process it.
 	// If OnIgnore is nil, no entries are ignored by default.
 	OnIgnore func(name string, path string, isDir bool, fileInfo os.FileInfo, err error) bool
@@ -399,17 +399,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	srcAbsPath := branch.srcAbsPath(w.synchronizer.srcRoot)
 	dstAbsPath := branch.dstAbsPath(w.synchronizer.dstRoot)
 
-	// Lstat source directory
-	srcInfo, err := os.Lstat(srcAbsPath)
-	if w.synchronizer.callbacks.OnLstat != nil {
-		w.synchronizer.callbacks.OnLstat(srcAbsPath, true, srcInfo, err)
-	}
-
-	if err != nil {
-		return fmt.Errorf("lstat source '%s': %w", srcAbsPath, err)
-	}
-
-	// ReadDir source
+	// ReadDir source (collects stat info for entries internally)
 	srcEntries, err := os.ReadDir(srcAbsPath)
 	if w.synchronizer.callbacks.OnReadDir != nil {
 		w.synchronizer.callbacks.OnReadDir(srcAbsPath, srcEntries, err)
@@ -417,6 +407,46 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 
 	if err != nil {
 		return fmt.Errorf("readdir source '%s': %w", srcAbsPath, err)
+	}
+
+	// Emit OnLstat for each source entry using the info populated by ReadDir
+	entryInfo := make(map[string]os.FileInfo, len(srcEntries))
+	entryErr := make(map[string]error)
+	if w.synchronizer.callbacks.OnLstat != nil {
+		for _, entry := range srcEntries {
+			info, infoErr := entry.Info()
+			w.synchronizer.callbacks.OnLstat(filepath.Join(srcAbsPath, entry.Name()), entry.IsDir(), info, infoErr)
+			if infoErr == nil {
+				entryInfo[entry.Name()] = info
+			} else {
+				entryErr[entry.Name()] = infoErr
+			}
+		}
+	} else {
+		for _, entry := range srcEntries {
+			info, infoErr := entry.Info()
+			if infoErr == nil {
+				entryInfo[entry.Name()] = info
+			} else {
+				entryErr[entry.Name()] = infoErr
+			}
+		}
+	}
+
+	getSrcInfo := func(name string) (os.FileInfo, error) {
+		if info, ok := entryInfo[name]; ok {
+			return info, nil
+		}
+		if err, ok := entryErr[name]; ok {
+			return nil, err
+		}
+		info, err := os.Lstat(filepath.Join(srcAbsPath, name))
+		if err == nil {
+			entryInfo[name] = info
+		} else {
+			entryErr[name] = err
+		}
+		return info, err
 	}
 
 	// Build map of destination entries
@@ -436,7 +466,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 		dstEntry, dstExists := dstMap[srcName]
 
 		// Check if entry should be ignored
-		srcInfo, err := os.Lstat(srcChildPath)
+		srcInfo, err := getSrcInfo(srcName)
 		if w.synchronizer.callbacks.OnIgnore != nil {
 			if w.synchronizer.callbacks.OnIgnore(srcName, srcChildPath, srcEntry.IsDir(), srcInfo, err) {
 				continue
@@ -452,7 +482,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			if !dstExists {
 				// Create destination directory
 				if !w.synchronizer.readOnly {
-					srcInfo, _ := os.Lstat(srcChildPath)
+					srcInfo, _ := getSrcInfo(srcName)
 					mode := srcInfo.Mode().Perm()
 					err := os.Mkdir(dstChildPath, mode)
 					if w.synchronizer.callbacks.OnMkdir != nil {
@@ -508,7 +538,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			// Check if we need to copy
 			shouldCopy := !dstExists
 			if !shouldCopy {
-				srcInfo, _ := os.Lstat(srcChildPath)
+				srcInfo, _ := getSrcInfo(srcName)
 				dstInfo, _ := os.Lstat(dstChildPath)
 				// Copy if size or modtime differs
 				shouldCopy = srcInfo.Size() != dstInfo.Size() || srcInfo.ModTime() != dstInfo.ModTime()
@@ -516,7 +546,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 
 			if shouldCopy {
 				if !w.synchronizer.readOnly {
-					srcInfo, _ := os.Lstat(srcChildPath)
+					srcInfo, _ := getSrcInfo(srcName)
 					err := w.synchronizer.copyFile(srcChildPath, dstChildPath)
 					if w.synchronizer.callbacks.OnCopy != nil {
 						w.synchronizer.callbacks.OnCopy(srcChildPath, dstChildPath, srcInfo.Size(), err)

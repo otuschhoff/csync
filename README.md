@@ -39,21 +39,19 @@ Install and run the bundled CLI to sync one directory into another:
 go install ./cmd/csync
 csync --help
 csync --verbose --stats /src/path /dst/path
-csync --exclude .git --exclude node_modules --exclude .snapshot --max-workers 32 /src /dst
-csync --verbose --log-op lstat,readdir --no-log-op copy /src /dst
+csync --exclude .git --exclude node_modules --max-workers 32 /src /dst
+csync --verbose --log-op readdir --no-log-op copy /src /dst
 ```
 
 - `--verbose` prints operations; defaults to change ops (mkdir, unlink, removeall, symlink, chmod, chown, chtimes, copy).
-- `--log-op <op>` adds operations to verbose output (comma-separated or repeatable). Examples: `lstat`, `readdir`, `ignore`.
+- `--log-op <op>` adds operations to verbose output (comma-separated or repeatable). Examples: `readdir`, `ignore`, `symlink`.
 - `--no-log-op <op>` removes operations from verbose output (comma-separated or repeatable).
 - In verbose mode, chmod/chown/chtimes logs include before/after values (modes, UID:GID, timestamps).
 - `--stats` renders a go-pretty table every 10s with cumulative and interval rates.
-- `--exclude <name>` skips entries whose base name matches; repeatable. Default: no exclusions.
+- `--exclude <name>` skips entries whose base name matches; repeatable.
 - `--max-workers <n>` caps the worker pool (default 32).
 - `--ignore-atime` ignores atime differences when syncing times, preserving destination atime when possible.
 - `--show-workers` prints detected CPUs and the configured worker pool size at start.
-
-Note: csync always skips `.snapshot` directories internally; `--exclude` starts empty so you can opt into additional names.
 
 ## Usage
 
@@ -133,7 +131,7 @@ log.Println("Validation complete - no changes made")
 
 The `Callbacks` struct provides optional hooks for:
 
-- **OnLstat** - Called after examining a file/directory
+- **OnLstat** - Called for each entry returned by ReadDir using entry.Info()
 - **OnReadDir** - Called after reading a directory
 - **OnCopy** - Called when copying a file
 - **OnMkdir** - Called when creating a directory
@@ -380,8 +378,8 @@ sync.copyFileWithHash(srcFile, dstFile, HashAlgoSHA256, collector)
 	- `name` - The basename of the entry
 	- `path` - The absolute path to the entry
 	- `isDir` - Whether the entry is a directory
-	- `fileInfo` - File information from lstat (contains permissions, size, times, etc.)
-	- `err` - Any error from lstat (usually nil)
+	- `fileInfo` - File information from entry.Info/stat (contains permissions, size, times, etc.)
+	- `err` - Any error from entry.Info/stat (usually nil)
 - Producer and consumer maintain independent block ID counters starting from 0
 	Return `true` to skip the entry, `false` to process it.
 - Block IDs are sequential: 0, 1, 2, ...
