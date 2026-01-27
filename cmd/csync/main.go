@@ -87,11 +87,11 @@ func main() {
 			src := args[0]
 			dst := args[1]
 			if workers <= 0 {
-				return fmt.Errorf("max-workers must be >= 1")
+				return fmt.Errorf("workers must be >= 1")
 			}
 
 			if showWorkers {
-				fmt.Printf("workers: cpus=%d max-workers=%d\n", runtime.NumCPU(), workers)
+				fmt.Printf("workers: cpus=%d workers=%d\n", runtime.NumCPU(), workers)
 			}
 
 			excludeSet := make(map[string]struct{}, len(excludes))
@@ -279,7 +279,7 @@ func main() {
 
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print verbose operation logs")
 	rootCmd.Flags().BoolVar(&statsFlag, "stats", false, "print stats every 10s during sync")
-	rootCmd.Flags().IntVar(&workers, "max-workers", 32, "maximum number of concurrent workers (>=1)")
+	rootCmd.Flags().IntVar(&workers, "workers", 32, "maximum number of concurrent workers (>=1)")
 	rootCmd.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude entries whose base name matches (repeatable)")
 	rootCmd.Flags().StringArrayVar(&logOpsFlag, "log-op", nil, "include additional operations in verbose output (comma-separated or repeatable)")
 	rootCmd.Flags().StringArrayVar(&noLogOpsFlag, "no-log-op", nil, "exclude operations from verbose output (comma-separated or repeatable)")

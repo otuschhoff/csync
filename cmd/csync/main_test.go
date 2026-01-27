@@ -326,7 +326,7 @@ func TestCobraCommandBasic(t *testing.T) {
 	var showWorkers bool
 
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose mode")
-	cmd.Flags().IntVar(&workers, "max-workers", 4, "max workers")
+	cmd.Flags().IntVar(&workers, "workers", 4, "workers")
 	cmd.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude")
 	cmd.Flags().BoolVar(&statsFlag, "stats", false, "stats mode")
 	cmd.Flags().StringArrayVar(&logOps, "log-op", nil, "log-op")
@@ -334,7 +334,7 @@ func TestCobraCommandBasic(t *testing.T) {
 	cmd.Flags().BoolVar(&showWorkers, "show-workers", false, "show workers")
 
 	// Parse some arguments
-	cmd.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy"})
+	cmd.SetArgs([]string{"--verbose", "--workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy"})
 	err := cmd.Execute()
 
 	// Since we didn't set a RunE, this will return an error for missing command, but flags should parse
@@ -345,14 +345,14 @@ func TestCobraCommandBasic(t *testing.T) {
 	// Re-test with ParseFlags only
 	cmd2 := &cobra.Command{}
 	cmd2.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose mode")
-	cmd2.Flags().IntVar(&workers, "max-workers", 4, "max workers")
+	cmd2.Flags().IntVar(&workers, "workers", 4, "workers")
 	cmd2.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude")
 	cmd2.Flags().StringArrayVar(&logOps, "log-op", nil, "log-op")
 	cmd2.Flags().StringArrayVar(&noLogOps, "no-log-op", nil, "no-log-op")
 	cmd2.Flags().BoolVar(&showWorkers, "show-workers", false, "show workers")
 
-	cmd2.SetArgs([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy", "--show-workers"})
-	err = cmd2.ParseFlags([]string{"--verbose", "--max-workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy", "--show-workers"})
+	cmd2.SetArgs([]string{"--verbose", "--workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy", "--show-workers"})
+	err = cmd2.ParseFlags([]string{"--verbose", "--workers", "8", "--exclude", ".git", "--exclude", "node_modules", "--log-op", "readdir", "--no-log-op", "copy", "--show-workers"})
 	if err != nil {
 		t.Errorf("failed to parse flags: %v", err)
 	}

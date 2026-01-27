@@ -39,7 +39,7 @@ Install and run the bundled CLI to sync one directory into another:
 go install ./cmd/csync
 csync --help
 csync --verbose --stats /src/path /dst/path
-csync --exclude .git --exclude node_modules --max-workers 32 /src /dst
+csync --exclude .git --exclude node_modules --workers 32 /src /dst
 csync --verbose --log-op readdir --no-log-op copy /src /dst
 ```
 
@@ -49,7 +49,7 @@ csync --verbose --log-op readdir --no-log-op copy /src /dst
 - In verbose mode, chmod/chown/chtimes logs include before/after values (modes, UID:GID, timestamps).
 - `--stats` renders a go-pretty table every 10s with cumulative and interval rates.
 - `--exclude <name>` skips entries whose base name matches; repeatable.
-- `--max-workers <n>` caps the worker pool (default 32).
+- `--workers <n>` caps the worker pool (default 32).
 - `--ignore-atime` ignores atime differences when syncing times, preserving destination atime when possible.
 - `--show-workers` prints detected CPUs and the configured worker pool size at start.
 
