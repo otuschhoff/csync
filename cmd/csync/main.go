@@ -355,6 +355,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	}
 
 	var names []string
+	var percents []string
 	var totals []string
 	var avgs []string
 	var intervals []string
@@ -367,9 +368,11 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		{Number: 2, Align: text.AlignRight},
 		{Number: 3, Align: text.AlignRight},
 		{Number: 4, Align: text.AlignRight},
+		{Number: 5, Align: text.AlignRight},
 	})
-	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)")})
+	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("%"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)")})
 
+	lstatTotal := cur.lstat
 	for _, r := range rows {
 		if r.total == 0 {
 			continue
@@ -378,6 +381,11 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		totalRate := float64(r.total) / elapsed
 		intervalRate := float64(r.total-prevTotal) / interval
 		names = append(names, r.name)
+		pct := ""
+		if r.name != "lstat" && lstatTotal > 0 {
+			pct = fmt.Sprintf("%d%%", (r.total*100)/lstatTotal)
+		}
+		percents = append(percents, pct)
 		totals = append(totals, formatScaledUint(r.total, ""))
 		avgs = append(avgs, formatScaledFloat(totalRate, "/s"))
 		intervals = append(intervals, formatScaledFloat(intervalRate, "/s"))
@@ -388,6 +396,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	bytesRateInterval := float64(cur.bytes-prevBytes) / interval
 	if cur.bytes > 0 {
 		names = append(names, "bytes")
+		percents = append(percents, "")
 		totals = append(totals, formatScaledUint(cur.bytes, "B"))
 		avgs = append(avgs, formatScaledFloat(bytesRateTotal, "B/s"))
 		intervals = append(intervals, formatScaledFloat(bytesRateInterval, "B/s"))
@@ -406,6 +415,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	for i, name := range names {
 		t.AppendRow(table.Row{
 			text.Bold.Sprint(name),
+			percents[i],
 			totals[i],
 			avgs[i],
 			intervals[i],
