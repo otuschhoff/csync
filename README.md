@@ -242,25 +242,96 @@ All tests pass with Go's race detector enabled, ensuring thread safety.
 4. **Network Filesystems** - May have different performance characteristics; test for your use case
 5. **Callbacks** - Keep callback implementations fast to avoid bottlenecks
 
+## Block-Based Hashing
+
+For file integrity verification, csync supports optional block-based hashing during copy operations. Files are processed in 4K blocks, with each block hashed using a selectable algorithm.
+
+### Supported Algorithms
+
+- **`HashAlgoMD5`** - MD5 (128 bits, 16 bytes)
+- **`HashAlgoSHA256`** - SHA-256 (256 bits, 32 bytes)
+- **`HashAlgoSHA512`** - SHA-512 (512 bits, 64 bytes)
+- **`HashAlgoNone`** - Disable hashing (default)
+
+### Using Block Hashing
+
+Implement the `BlockHasher` interface to receive hash values for each 4K block:
+
+```go
+type BlockHasher interface {
+    HashBlock(blockID uint64, hash []byte) error
+}
+```
+
+Example: Copy a file with SHA256 block hashing:
+
+```go
+type hashCollector struct {
+    hashes map[uint64][]byte
+    mu     sync.Mutex
+}
+
+func (hc *hashCollector) HashBlock(blockID uint64, hash []byte) error {
+    hc.mu.Lock()
+    defer hc.mu.Unlock()
+    
+    // blockID is 0-indexed and incremented independently by the caller
+    hashCopy := make([]byte, len(hash))
+    copy(hashCopy, hash)
+    hc.hashes[blockID] = hashCopy
+    return nil
+}
+
+// Use with Synchronizer
+sync := NewSynchronizer(srcDir, dstDir, 4, false, Callbacks{})
+collector := &hashCollector{hashes: make(map[uint64][]byte)}
+
+// Access the file copy function directly for hashing:
+// sync.copyFileWithHash(srcPath, dstPath, HashAlgoSHA256, collector)
+
+// Or integrate with callbacks for standard sync operations
+// Note: Current sync flow doesn't automatically use hashing, 
+// but copyFileWithHash is available for custom integration
+```
+
+### Key Points
+
+- Both producer (copy) and consumer (hasher) maintain independent block ID counters starting from 0
+- Block IDs are sequential: 0, 1, 2, ...
+- Each block is up to 4096 bytes; partial blocks at file end are hashed as-is
+- Hash bytes should be copied by the consumer; the caller does not retain references
+- Hashing adds minimal overhead; use HashAlgoNone for the fastest copy
+
 ## API Reference
 
 ### Types
 
 - **`Synchronizer`** - Main synchronization engine
 - **`Callbacks`** - Optional operation hooks
+- **`Logger`** - Interface for custom logging
+- **`BlockHasher`** - Interface for consuming block hashes
+- **`HashAlgo`** - Hash algorithm selector (MD5, SHA256, SHA512, None)
+- **`BlockHash`** - Struct containing block ID and hash bytes
 
 ### Functions
 
 - **`NewSynchronizer(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks) *Synchronizer`**
-  - Create a new synchronizer instance
+  - Create a new synchronizer instance with default logger
   - `numWorkers`: Number of parallel workers (min 1)
   - `readOnly`: When true, prevents modifications to destination
   - `callbacks`: Optional operation hooks (can be empty)
+
+- **`NewSynchronizerWithLogger(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks, logger Logger) *Synchronizer`**
+  - Create a new synchronizer with custom logger
+  - `logger`: Custom Logger implementation (nil uses default)
 
 ### Methods
 
 - **`Run() error`** - Start synchronization (blocks until complete)
 - **`Stop()`** - Cancel synchronization gracefully
+- **`copyFileWithHash(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher) error`** - Copy file with optional block hashing
+  - `algo`: Hash algorithm to use (HashAlgoNone to disable)
+  - `hasher`: Callback to receive block hashes (can be nil if algo is HashAlgoNone)
 
 ## Limitations
 

@@ -31,7 +31,11 @@ package csync
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/sha256"
+	"crypto/sha512"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"os"
@@ -42,6 +46,36 @@ import (
 
 // Version is the current version of the csync package.
 const Version = "0.1.0"
+
+// HashAlgo specifies the algorithm to use for block hashing during file copy.
+type HashAlgo string
+
+const (
+	// HashAlgoNone disables block hashing
+	HashAlgoNone HashAlgo = ""
+	// HashAlgoMD5 uses MD5 hashing (128 bits)
+	HashAlgoMD5 HashAlgo = "md5"
+	// HashAlgoSHA256 uses SHA-256 hashing (256 bits)
+	HashAlgoSHA256 HashAlgo = "sha256"
+	// HashAlgoSHA512 uses SHA-512 hashing (512 bits)
+	HashAlgoSHA512 HashAlgo = "sha512"
+)
+
+// BlockHash represents the hash of a single 4K block.
+// BlockID is 0-indexed and incremented by both producer and consumer independently.
+type BlockHash struct {
+	BlockID uint64 // 0-indexed block number
+	Hash    []byte // Hash bytes (length depends on algorithm)
+}
+
+// BlockHasher is an interface for consuming block hashes during file copy.
+// Implementations should be safe for concurrent access.
+type BlockHasher interface {
+	// HashBlock is called with the hash of each 4K block as it's copied.
+	// blockID is 0-indexed and incremented by the caller.
+	// hash contains the hash bytes; the caller does not retain a reference to it.
+	HashBlock(blockID uint64, hash []byte) error
+}
 
 // Logger defines the interface for logging messages during synchronization.
 // Implementations can use standard logging, structured logging, or custom handling.
@@ -463,10 +497,19 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	return nil
 }
 
-// copyFile copies a file from source to destination.
-// In read-only mode, this is a no-op. Otherwise, it performs a complete file copy
-// using io.Copy for efficiency.
-func (s *Synchronizer) copyFile(srcPath, dstPath string) error {
+// copyFileWithHash copies a file from source to destination with optional block-based hashing.
+// It reads the file in 4K blocks, optionally hashing each block, and sends hash values
+// to the BlockHasher callback if provided. Both producer (copyFileWithHash) and consumer
+// (BlockHasher) maintain independent block ID counters starting from 0.
+//
+// Parameters:
+//   - srcPath: source file path
+//   - dstPath: destination file path
+//   - algo: hash algorithm to use (HashAlgoNone to disable hashing)
+//   - hasher: callback to receive block hashes (can be nil if algo is HashAlgoNone)
+//
+// Returns an error if the copy fails or if the hasher returns an error.
+func (s *Synchronizer) copyFileWithHash(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher) error {
 	if s.readOnly {
 		return nil
 	}
@@ -483,8 +526,68 @@ func (s *Synchronizer) copyFile(srcPath, dstPath string) error {
 	}
 	defer dstFile.Close()
 
-	_, err = io.Copy(dstFile, srcFile)
-	return err
+	const blockSize = 4096
+
+	// If no hashing requested, use simple io.Copy
+	if algo == HashAlgoNone || hasher == nil {
+		_, err = io.Copy(dstFile, srcFile)
+		return err
+	}
+
+	// Create hash function
+	var h hash.Hash
+	switch algo {
+	case HashAlgoMD5:
+		h = md5.New()
+	case HashAlgoSHA256:
+		h = sha256.New()
+	case HashAlgoSHA512:
+		h = sha512.New()
+	default:
+		return fmt.Errorf("unsupported hash algorithm: %s", algo)
+	}
+
+	buffer := make([]byte, blockSize)
+	blockID := uint64(0)
+
+	for {
+		n, err := srcFile.Read(buffer)
+		if err != nil && err != io.EOF {
+			return err
+		}
+
+		if n > 0 {
+			// Write to destination
+			if _, err := dstFile.Write(buffer[:n]); err != nil {
+				return err
+			}
+
+			// Hash the block
+			h.Reset()
+			h.Write(buffer[:n])
+			hashBytes := h.Sum(nil)
+
+			// Send hash to consumer
+			if err := hasher.HashBlock(blockID, hashBytes); err != nil {
+				return fmt.Errorf("hash block callback failed for block %d: %w", blockID, err)
+			}
+
+			blockID++
+		}
+
+		if err == io.EOF {
+			break
+		}
+	}
+
+	return nil
+}
+
+// copyFile copies a file from source to destination.
+// In read-only mode, this is a no-op. Otherwise, it performs a complete file copy
+// using io.Copy for efficiency.
+func (s *Synchronizer) copyFile(srcPath, dstPath string) error {
+	return s.copyFileWithHash(srcPath, dstPath, HashAlgoNone, nil)
 }
 
 // unlink removes a file or symlink.

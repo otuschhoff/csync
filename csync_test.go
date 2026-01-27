@@ -1,6 +1,7 @@
 package csync
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -532,4 +533,147 @@ type mockLogger struct {
 
 func (ml *mockLogger) Printf(format string, v ...interface{}) {
 	*ml.calls = append(*ml.calls, fmt.Sprintf(format, v...))
+}
+
+// TestBlockHashing verifies that block hashing works correctly with different algorithms.
+func TestBlockHashing(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a file with known content (multiple 4K blocks)
+	fileContent := make([]byte, 4096*3+100) // 3 full blocks + partial block
+	for i := 0; i < len(fileContent); i++ {
+		fileContent[i] = byte(i % 256)
+	}
+
+	srcFile := filepath.Join(srcDir, "test.bin")
+	dstFile := filepath.Join(dstDir, "test.bin")
+	os.WriteFile(srcFile, fileContent, 0644)
+
+	// Test with SHA256
+	hashes := make(map[uint64][]byte)
+	hasher := &mockBlockHasher{hashes: hashes}
+
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+
+	// Copy file with hashing
+	err := sync.copyFileWithHash(srcFile, dstFile, HashAlgoSHA256, hasher)
+	if err != nil {
+		t.Fatalf("copyFileWithHash failed: %v", err)
+	}
+
+	// Verify we got all blocks
+	expectedBlocks := 4 // 3 full 4K blocks + 1 partial
+	if len(hashes) != expectedBlocks {
+		t.Errorf("expected %d block hashes, got %d", expectedBlocks, len(hashes))
+	}
+
+	// Verify block IDs are sequential from 0
+	for i := 0; i < expectedBlocks; i++ {
+		if _, ok := hashes[uint64(i)]; !ok {
+			t.Errorf("missing hash for block %d", i)
+		}
+	}
+
+	// Verify destination file matches source
+	dstContent, err := os.ReadFile(dstFile)
+	if err != nil {
+		t.Fatalf("failed to read destination file: %v", err)
+	}
+
+	if !bytes.Equal(fileContent, dstContent) {
+		t.Errorf("destination file content doesn't match source")
+	}
+}
+
+// TestBlockHashingAlgorithms verifies different hash algorithms produce different results.
+func TestBlockHashingAlgorithms(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a small test file
+	fileContent := []byte("Hello, World! This is test content.")
+	srcFile := filepath.Join(srcDir, "test.txt")
+	os.WriteFile(srcFile, fileContent, 0644)
+
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+
+	// Test MD5
+	md5Hashes := make(map[uint64][]byte)
+	md5Hasher := &mockBlockHasher{hashes: md5Hashes}
+	dstMD5 := filepath.Join(dstDir, "test_md5.txt")
+	if err := sync.copyFileWithHash(srcFile, dstMD5, HashAlgoMD5, md5Hasher); err != nil {
+		t.Fatalf("MD5 copy failed: %v", err)
+	}
+
+	// Test SHA256
+	sha256Hashes := make(map[uint64][]byte)
+	sha256Hasher := &mockBlockHasher{hashes: sha256Hashes}
+	dstSHA256 := filepath.Join(dstDir, "test_sha256.txt")
+	if err := sync.copyFileWithHash(srcFile, dstSHA256, HashAlgoSHA256, sha256Hasher); err != nil {
+		t.Fatalf("SHA256 copy failed: %v", err)
+	}
+
+	// Verify we got hashes for both
+	if len(md5Hashes) == 0 {
+		t.Errorf("no MD5 hashes received")
+	}
+	if len(sha256Hashes) == 0 {
+		t.Errorf("no SHA256 hashes received")
+	}
+
+	// Verify hash lengths are different
+	md5Hash := md5Hashes[0]
+	sha256Hash := sha256Hashes[0]
+	if len(md5Hash) == len(sha256Hash) {
+		t.Errorf("expected different hash lengths for MD5 (%d) and SHA256 (%d)", len(md5Hash), len(sha256Hash))
+	}
+
+	if len(md5Hash) != 16 { // MD5 is 16 bytes
+		t.Errorf("expected MD5 hash length 16, got %d", len(md5Hash))
+	}
+	if len(sha256Hash) != 32 { // SHA256 is 32 bytes
+		t.Errorf("expected SHA256 hash length 32, got %d", len(sha256Hash))
+	}
+}
+
+// TestBlockHashingWithNoHasher verifies copy works without a hasher.
+func TestBlockHashingWithNoHasher(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	fileContent := []byte("Test content for copying without hashing")
+	srcFile := filepath.Join(srcDir, "test.txt")
+	dstFile := filepath.Join(dstDir, "test.txt")
+	os.WriteFile(srcFile, fileContent, 0644)
+
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+
+	// Copy with HashAlgoNone (should fall back to io.Copy)
+	if err := sync.copyFileWithHash(srcFile, dstFile, HashAlgoNone, nil); err != nil {
+		t.Fatalf("copyFileWithHash failed: %v", err)
+	}
+
+	// Verify destination exists and matches
+	dstContent, err := os.ReadFile(dstFile)
+	if err != nil {
+		t.Fatalf("failed to read destination file: %v", err)
+	}
+
+	if !bytes.Equal(fileContent, dstContent) {
+		t.Errorf("destination file content doesn't match source")
+	}
+}
+
+// mockBlockHasher implements BlockHasher for testing.
+type mockBlockHasher struct {
+	hashes map[uint64][]byte
+}
+
+func (mbh *mockBlockHasher) HashBlock(blockID uint64, hash []byte) error {
+	// Make a copy of the hash since the caller doesn't retain a reference
+	hashCopy := make([]byte, len(hash))
+	copy(hashCopy, hash)
+	mbh.hashes[blockID] = hashCopy
+	return nil
 }
