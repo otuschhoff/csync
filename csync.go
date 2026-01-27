@@ -43,6 +43,20 @@ import (
 // Version is the current version of the csync package.
 const Version = "0.1.0"
 
+// Logger defines the interface for logging messages during synchronization.
+// Implementations can use standard logging, structured logging, or custom handling.
+type Logger interface {
+	// Printf logs a formatted message similar to fmt.Printf.
+	Printf(format string, v ...interface{})
+}
+
+// defaultLogger wraps the standard log package to implement the Logger interface.
+type defaultLogger struct{}
+
+func (dl *defaultLogger) Printf(format string, v ...interface{}) {
+	log.Printf(format, v...)
+}
+
 // Callbacks define optional handlers for sync operations.
 // All callbacks are optional (zero value means no callback).
 // Callbacks are called during various stages of the synchronization process
@@ -103,6 +117,7 @@ type Synchronizer struct {
 	dstRoot   string
 	callbacks Callbacks
 	readOnly  bool
+	logger    Logger
 
 	monitorCtx context.Context
 	cancel     context.CancelFunc
@@ -197,9 +212,20 @@ func (sw *syncWorker) queuePop() *syncBranch {
 // If numWorkers <= 0, it defaults to 1.
 // readOnly, when true, prevents any modifications to the destination.
 // callbacks can be used to monitor sync operations; nil callbacks are ignored.
+// logger is used for logging errors and progress; if nil, a default logger is used.
 func NewSynchronizer(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks) *Synchronizer {
+	return NewSynchronizerWithLogger(srcRoot, dstRoot, numWorkers, readOnly, callbacks, nil)
+}
+
+// NewSynchronizerWithLogger creates a new Synchronizer with a custom logger.
+// If logger is nil, a default logger wrapping the standard log package is used.
+func NewSynchronizerWithLogger(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks, logger Logger) *Synchronizer {
 	if numWorkers <= 0 {
 		numWorkers = 1
+	}
+
+	if logger == nil {
+		logger = &defaultLogger{}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,6 +235,7 @@ func NewSynchronizer(srcRoot, dstRoot string, numWorkers int, readOnly bool, cal
 		dstRoot:    filepath.Clean(dstRoot),
 		callbacks:  callbacks,
 		readOnly:   readOnly,
+		logger:     logger,
 		monitorCtx: ctx,
 		cancel:     cancel,
 		numWorkers: numWorkers,
@@ -254,7 +281,7 @@ func (s *Synchronizer) startWorker(worker *syncWorker) {
 
 		if branch != nil {
 			if err := worker.processBranch(branch); err != nil {
-				log.Printf("ERROR processing '%s': %v\n", branch.relPath(), err)
+				s.logger.Printf("ERROR processing '%s': %v\n", branch.relPath(), err)
 			}
 		} else {
 			if !s.stealWork(worker) {

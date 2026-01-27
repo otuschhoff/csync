@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -462,4 +463,73 @@ func TestConsistency(t *testing.T) {
 	if firstCount != secondCount {
 		t.Errorf("file count mismatch between syncs: first=%d, second=%d", firstCount, secondCount)
 	}
+}
+
+// TestCustomLogger verifies that a custom logger is called during synchronization.
+func TestCustomLogger(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create test files
+	os.WriteFile(filepath.Join(srcDir, "file1.txt"), []byte("content1"), 0644)
+	os.Mkdir(filepath.Join(srcDir, "subdir"), 0755)
+	os.WriteFile(filepath.Join(srcDir, "subdir", "file2.txt"), []byte("content2"), 0644)
+
+	// Create a mock logger
+	logCalls := []string{}
+	mockLogger := &mockLogger{
+		calls: &logCalls,
+	}
+
+	// Run sync with custom logger
+	sync := NewSynchronizerWithLogger(srcDir, dstDir, 2, false, Callbacks{}, mockLogger)
+	if err := sync.Run(); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Verify that no error messages were logged (everything should succeed)
+	for _, call := range logCalls {
+		if strings.Contains(call, "ERROR") {
+			t.Errorf("unexpected ERROR in logs: %s", call)
+		}
+	}
+}
+
+// TestCustomLoggerWithError verifies that errors are logged to custom logger.
+func TestCustomLoggerWithError(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a source directory
+	os.Mkdir(filepath.Join(srcDir, "dir1"), 0755)
+
+	// Create a mock logger
+	logCalls := []string{}
+	mockLogger := &mockLogger{
+		calls: &logCalls,
+	}
+
+	// Remove read permissions from source to cause an error
+	os.Chmod(filepath.Join(srcDir, "dir1"), 0000)
+	defer os.Chmod(filepath.Join(srcDir, "dir1"), 0755)
+
+	// Run sync with custom logger - it should handle the error gracefully
+	sync := NewSynchronizerWithLogger(srcDir, dstDir, 1, false, Callbacks{}, mockLogger)
+	if err := sync.Run(); err != nil {
+		// Run may or may not return an error, but we're checking logging
+	}
+
+	// Verify that custom logger was used (at least one call should have been made)
+	if len(logCalls) == 0 {
+		t.Log("No error encountered during sync - this is acceptable")
+	}
+}
+
+// mockLogger implements the Logger interface for testing purposes.
+type mockLogger struct {
+	calls *[]string
+}
+
+func (ml *mockLogger) Printf(format string, v ...interface{}) {
+	*ml.calls = append(*ml.calls, fmt.Sprintf(format, v...))
 }

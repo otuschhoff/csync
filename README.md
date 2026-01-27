@@ -120,6 +120,49 @@ The `Callbacks` struct provides optional hooks for:
 - **OnChown** - Called when changing ownership (reserved)
 - **OnChtimes** - Called when changing modification times (reserved)
 
+### Custom Logger
+
+By default, csync logs errors to the standard `log` package. You can provide a custom logger implementing the `Logger` interface to integrate with your logging system (e.g., structured logging):
+
+```go
+package main
+
+import (
+	"fmt"
+	"log/slog"
+	"csync"
+)
+
+// Adapter to use slog with csync
+type slogAdapter struct {
+	logger *slog.Logger
+}
+
+func (sa *slogAdapter) Printf(format string, v ...interface{}) {
+	sa.logger.Warn("csync", "message", fmt.Sprintf(format, v...))
+}
+
+func main() {
+	srcDir := "/source"
+	dstDir := "/destination"
+	
+	logger := &slogAdapter{logger: slog.Default()}
+	
+	// Use custom logger
+	sync := csync.NewSynchronizerWithLogger(srcDir, dstDir, 4, false, csync.Callbacks{}, logger)
+	if err := sync.Run(); err != nil {
+		slog.Error("sync failed", "err", err)
+	}
+}
+```
+
+The `Logger` interface is simple:
+```go
+type Logger interface {
+	Printf(format string, v ...interface{})
+}
+```
+
 ## Synchronization Behavior
 
 ### What Gets Synchronized
