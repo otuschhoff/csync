@@ -31,6 +31,22 @@ The csync package aims to provide:
 go get csync
 ```
 
+### CLI command
+
+Install and run the bundled CLI to sync one directory into another:
+
+```bash
+go install ./cmd/csync
+csync --help
+csync --verbose --stats /src/path /dst/path
+csync --exclude .git --exclude node_modules --max-workers 8 /src /dst
+```
+
+- `--verbose` prints each operation as it occurs.
+- `--stats` renders a go-pretty table every 10s with cumulative and interval rates.
+- `--exclude <name>` skips entries whose base name matches; repeatable.
+- `--max-workers <n>` caps the worker pool (default 4).
+
 ## Usage
 
 ### Basic Synchronization

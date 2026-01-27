@@ -540,6 +540,11 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 	if err := os.Chmod(dstPath, mode); err != nil {
 		// Log but don't fail
 		s.logger.Printf("WARN: failed to chmod %s: %v\n", dstPath, err)
+		if s.callbacks.OnChmod != nil {
+			s.callbacks.OnChmod(dstPath, mode, err)
+		}
+	} else if s.callbacks.OnChmod != nil {
+		s.callbacks.OnChmod(dstPath, mode, nil)
 	}
 
 	// Sync modification and access times
@@ -547,6 +552,11 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 	if err := os.Chtimes(dstPath, modTime, modTime); err != nil {
 		// Log but don't fail
 		s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
+		if s.callbacks.OnChtimes != nil {
+			s.callbacks.OnChtimes(dstPath, err)
+		}
+	} else if s.callbacks.OnChtimes != nil {
+		s.callbacks.OnChtimes(dstPath, nil)
 	}
 
 	// Sync ownership (uid/gid) if possible
@@ -558,6 +568,11 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 		if err := os.Chown(dstPath, uid, gid); err != nil {
 			// Log but don't fail (non-root users typically can't chown)
 			s.logger.Printf("DEBUG: failed to chown %s to %d:%d: %v\n", dstPath, uid, gid, err)
+			if s.callbacks.OnChown != nil {
+				s.callbacks.OnChown(dstPath, uid, gid, err)
+			}
+		} else if s.callbacks.OnChown != nil {
+			s.callbacks.OnChown(dstPath, uid, gid, nil)
 		}
 	}
 
