@@ -388,7 +388,18 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		percents = append(percents, pct)
 		totals = append(totals, formatScaledUint(r.total, ""))
 		avgs = append(avgs, formatScaledFloat(totalRate, "/s"))
-		intervals = append(intervals, formatScaledFloat(intervalRate, "/s"))
+
+		// Format interval rate with conditional styling
+		intervalStr := formatScaledFloat(intervalRate, "/s")
+		if totalRate > 0 {
+			ratio := intervalRate / totalRate
+			if ratio > 1.5 {
+				intervalStr = text.Bold.Sprint(intervalStr)
+			} else if ratio < 2.0/3.0 {
+				intervalStr = text.FgHiBlack.Sprint(intervalStr)
+			}
+		}
+		intervals = append(intervals, intervalStr)
 	}
 
 	prevBytes := prev.bytes
@@ -399,7 +410,18 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		percents = append(percents, "")
 		totals = append(totals, formatScaledUint(cur.bytes, "B"))
 		avgs = append(avgs, formatScaledFloat(bytesRateTotal, "B/s"))
-		intervals = append(intervals, formatScaledFloat(bytesRateInterval, "B/s"))
+
+		// Format bytes interval rate with conditional styling
+		bytesIntervalStr := formatScaledFloat(bytesRateInterval, "B/s")
+		if bytesRateTotal > 0 {
+			ratio := bytesRateInterval / bytesRateTotal
+			if ratio > 1.5 {
+				bytesIntervalStr = text.Bold.Sprint(bytesIntervalStr)
+			} else if ratio < 2.0/3.0 {
+				bytesIntervalStr = text.FgHiBlack.Sprint(bytesIntervalStr)
+			}
+		}
+		intervals = append(intervals, bytesIntervalStr)
 	}
 
 	// If nothing recorded, still render headers for clarity.
