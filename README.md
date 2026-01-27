@@ -50,6 +50,7 @@ csync --verbose --log-op lstat,readdir --no-log-op copy /src /dst
 - `--stats` renders a go-pretty table every 10s with cumulative and interval rates.
 - `--exclude <name>` skips entries whose base name matches; repeatable.
 - `--max-workers <n>` caps the worker pool (default 4).
+- `--ignore-atime` ignores atime differences when syncing times, preserving destination atime when possible.
 
 ## Usage
 

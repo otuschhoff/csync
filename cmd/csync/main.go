@@ -70,6 +70,7 @@ func main() {
 	var excludes []string
 	var logOpsFlag []string
 	var noLogOpsFlag []string
+	var ignoreAtime bool
 
 	rootCmd := &cobra.Command{
 		Use:   "csync <src> <dst>",
@@ -253,7 +254,8 @@ func main() {
 				},
 			}
 
-			syncer := csync.NewSynchronizer(src, dst, workers, false, callbacks)
+			opts := csync.Options{IgnoreAtime: ignoreAtime}
+			syncer := csync.NewSynchronizerWithLoggerAndOptions(src, dst, workers, false, callbacks, nil, opts)
 
 			var done chan struct{}
 			if statsFlag {
@@ -275,6 +277,7 @@ func main() {
 	rootCmd.Flags().StringArrayVar(&excludes, "exclude", nil, "exclude entries whose base name matches (repeatable)")
 	rootCmd.Flags().StringArrayVar(&logOpsFlag, "log-op", nil, "include additional operations in verbose output (comma-separated or repeatable)")
 	rootCmd.Flags().StringArrayVar(&noLogOpsFlag, "no-log-op", nil, "exclude operations from verbose output (comma-separated or repeatable)")
+	rootCmd.Flags().BoolVar(&ignoreAtime, "ignore-atime", false, "ignore atime differences when syncing times (preserve existing atime)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -344,28 +347,52 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		{"copy", cur.copies},
 	}
 
+	totals := make([]string, len(rows)+1)
+	avgs := make([]string, len(rows)+1)
+	intervals := make([]string, len(rows)+1)
+
 	t := table.NewWriter()
 	t.SetOutputMirror(os.Stdout)
 	t.SetStyle(table.StyleRounded)
 	t.Style().Color.Row = text.Colors{text.Reset}
+	t.SetColumnConfigs([]table.ColumnConfig{
+		{Number: 2, Align: text.AlignRight},
+		{Number: 3, Align: text.AlignRight},
+		{Number: 4, Align: text.AlignRight},
+	})
 	t.AppendHeader(table.Row{"Operation", "Total", "Avg/s", "Avg/s (interval)"})
 
-	for _, r := range rows {
+	for i, r := range rows {
 		prevTotal := getPrevTotal(prev, r.name)
 		totalRate := float64(r.total) / elapsed
 		intervalRate := float64(r.total-prevTotal) / interval
-		t.AppendRow(table.Row{
-			r.name,
-			formatCount(r.total),
-			formatFloat(totalRate),
-			formatFloat(intervalRate),
-		})
+		totals[i] = formatScaledUint(r.total, "")
+		avgs[i] = formatScaledFloat(totalRate, "/s")
+		intervals[i] = formatScaledFloat(intervalRate, "/s")
 	}
 
 	prevBytes := prev.bytes
 	bytesRateTotal := float64(cur.bytes) / elapsed
 	bytesRateInterval := float64(cur.bytes-prevBytes) / interval
-	t.AppendRow(table.Row{"bytes", formatBytes(cur.bytes), formatBytesRate(bytesRateTotal), formatBytesRate(bytesRateInterval)})
+	bytesIdx := len(rows)
+	totals[bytesIdx] = formatScaledUint(cur.bytes, "B")
+	avgs[bytesIdx] = formatScaledFloat(bytesRateTotal, "B/s")
+	intervals[bytesIdx] = formatScaledFloat(bytesRateInterval, "B/s")
+
+	totals = alignDecimal(totals)
+	avgs = alignDecimal(avgs)
+	intervals = alignDecimal(intervals)
+
+	for i, r := range rows {
+		t.AppendRow(table.Row{
+			r.name,
+			totals[i],
+			avgs[i],
+			intervals[i],
+		})
+	}
+
+	t.AppendRow(table.Row{"bytes", totals[bytesIdx], avgs[bytesIdx], intervals[bytesIdx]})
 
 	t.Render()
 }
@@ -396,6 +423,68 @@ func getPrevTotal(prev statsSnapshot, name string) uint64 {
 	default:
 		return 0
 	}
+}
+
+// formatScaledUint renders an integer using scaled units (k, m, g, t...) with one decimal place.
+// Returns an empty string when the value is zero.
+func formatScaledUint(n uint64, suffix string) string {
+	return formatScaledFloat(float64(n), suffix)
+}
+
+// formatScaledFloat renders a float using scaled units (k, m, g, t...) with one decimal place.
+// Returns an empty string when the value is zero.
+func formatScaledFloat(v float64, suffix string) string {
+	if v == 0 {
+		return ""
+	}
+	units := []string{"", "k", "m", "g", "t", "p", "e"}
+	idx := 0
+	abs := v
+	if abs < 0 {
+		abs = -abs
+	}
+	for abs >= 1000 && idx < len(units)-1 {
+		v /= 1000
+		abs /= 1000
+		idx++
+	}
+	return fmt.Sprintf("%.1f%s%s", v, units[idx], suffix)
+}
+
+// alignDecimal pads values so their decimal points line up in a column.
+func alignDecimal(values []string) []string {
+	maxInt := 0
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+		dot := strings.IndexByte(v, '.')
+		if dot == -1 {
+			dot = len(v)
+		}
+		if dot > maxInt {
+			maxInt = dot
+		}
+	}
+
+	out := make([]string, len(values))
+	for i, v := range values {
+		if v == "" {
+			out[i] = ""
+			continue
+		}
+		dot := strings.IndexByte(v, '.')
+		if dot == -1 {
+			dot = len(v)
+		}
+		pad := maxInt - dot
+		if pad > 0 {
+			out[i] = strings.Repeat(" ", pad) + v
+		} else {
+			out[i] = v
+		}
+	}
+	return out
 }
 
 // formatCount formats an unsigned integer with thousands separators.

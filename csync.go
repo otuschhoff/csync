@@ -165,6 +165,13 @@ type Callbacks struct {
 	OnIgnore func(name string, path string, isDir bool, fileInfo os.FileInfo, err error) bool
 }
 
+// Options configures optional synchronizer behaviors.
+type Options struct {
+	// IgnoreAtime skips considering atime differences when deciding whether to
+	// call Chtimes and preserves existing atime when possible.
+	IgnoreAtime bool
+}
+
 // Synchronizer syncs one directory tree to another.
 // It uses a worker pool for parallel processing with work stealing for efficient
 // load balancing. The synchronizer handles files, directories, and symlinks,
@@ -175,6 +182,7 @@ type Synchronizer struct {
 	callbacks Callbacks
 	readOnly  bool
 	logger    Logger
+	options   Options
 
 	monitorCtx context.Context
 	cancel     context.CancelFunc
@@ -271,12 +279,18 @@ func (sw *syncWorker) queuePop() *syncBranch {
 // callbacks can be used to monitor sync operations; nil callbacks are ignored.
 // logger is used for logging errors and progress; if nil, a default logger is used.
 func NewSynchronizer(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks) *Synchronizer {
-	return NewSynchronizerWithLogger(srcRoot, dstRoot, numWorkers, readOnly, callbacks, nil)
+	return NewSynchronizerWithLoggerAndOptions(srcRoot, dstRoot, numWorkers, readOnly, callbacks, nil, Options{})
 }
 
 // NewSynchronizerWithLogger creates a new Synchronizer with a custom logger.
 // If logger is nil, a default logger wrapping the standard log package is used.
 func NewSynchronizerWithLogger(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks, logger Logger) *Synchronizer {
+	return NewSynchronizerWithLoggerAndOptions(srcRoot, dstRoot, numWorkers, readOnly, callbacks, logger, Options{})
+}
+
+// NewSynchronizerWithLoggerAndOptions creates a new Synchronizer with a custom logger and options.
+// If logger is nil, a default logger wrapping the standard log package is used.
+func NewSynchronizerWithLoggerAndOptions(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks, logger Logger, opts Options) *Synchronizer {
 	if numWorkers <= 0 {
 		numWorkers = 1
 	}
@@ -293,6 +307,7 @@ func NewSynchronizerWithLogger(srcRoot, dstRoot string, numWorkers int, readOnly
 		callbacks:  callbacks,
 		readOnly:   readOnly,
 		logger:     logger,
+		options:    opts,
 		monitorCtx: ctx,
 		cancel:     cancel,
 		numWorkers: numWorkers,
@@ -588,23 +603,30 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 	// Sync modification and access times
 	modTime := srcInfo.ModTime()
 	changedAtime := beforeAtime.IsZero() || !beforeAtime.Equal(modTime)
+	if s.options.IgnoreAtime {
+		changedAtime = false
+	}
 	changedMtime := beforeMtime.IsZero() || !beforeMtime.Equal(modTime)
 	if changedAtime || changedMtime {
-		if err := os.Chtimes(dstPath, modTime, modTime); err != nil {
+		atimeToSet := modTime
+		if s.options.IgnoreAtime && !beforeAtime.IsZero() {
+			atimeToSet = beforeAtime
+		}
+		if err := os.Chtimes(dstPath, atimeToSet, modTime); err != nil {
 			// Log but don't fail
 			s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
 			if s.callbacks.OnChtimes != nil {
 				s.callbacks.OnChtimes(dstPath, err)
 			}
 			if s.callbacks.OnChtimesDetail != nil {
-				s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, modTime, modTime, changedAtime, changedMtime, err)
+				s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, err)
 			}
 		} else {
 			if s.callbacks.OnChtimes != nil {
 				s.callbacks.OnChtimes(dstPath, nil)
 			}
 			if s.callbacks.OnChtimesDetail != nil {
-				s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, modTime, modTime, changedAtime, changedMtime, nil)
+				s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, nil)
 			}
 		}
 	}

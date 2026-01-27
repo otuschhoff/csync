@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"csync"
@@ -207,6 +208,67 @@ func TestFormatFloat(t *testing.T) {
 		result := formatFloat(tt.input)
 		if result != tt.expected {
 			t.Errorf("formatFloat(%.3f) = %q, expected %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
+func TestFormatScaled(t *testing.T) {
+	floatTests := []struct {
+		val      float64
+		suffix   string
+		expected string
+	}{
+		{0, "", ""},
+		{1, "", "1.0"},
+		{999, "", "999.0"},
+		{1500, "", "1.5k"},
+		{2500000, "", "2.5m"},
+		{1536, "B", "1.5kB"},
+		{2048000, "B/s", "2.0mB/s"},
+	}
+
+	for _, tt := range floatTests {
+		result := formatScaledFloat(tt.val, tt.suffix)
+		if result != tt.expected {
+			t.Errorf("formatScaledFloat(%.1f, %q) = %q, expected %q", tt.val, tt.suffix, result, tt.expected)
+		}
+	}
+
+	uintTests := []struct {
+		val      uint64
+		suffix   string
+		expected string
+	}{
+		{0, "", ""},
+		{1, "", "1.0"},
+		{1500, "", "1.5k"},
+		{1_500_000_000, "", "1.5g"},
+	}
+
+	for _, tt := range uintTests {
+		result := formatScaledUint(tt.val, tt.suffix)
+		if result != tt.expected {
+			t.Errorf("formatScaledUint(%d, %q) = %q, expected %q", tt.val, tt.suffix, result, tt.expected)
+		}
+	}
+}
+
+func TestAlignDecimal(t *testing.T) {
+	vals := []string{"1.5k", "12.3m", "999.9"}
+	aligned := alignDecimal(vals)
+	if len(aligned) != len(vals) {
+		t.Fatalf("expected aligned length %d, got %d", len(vals), len(aligned))
+	}
+	var expectedDot = -1
+	for i, v := range aligned {
+		dot := strings.IndexByte(v, '.')
+		if dot == -1 {
+			t.Fatalf("value %q missing decimal point", v)
+		}
+		if expectedDot == -1 {
+			expectedDot = dot
+		} else if dot != expectedDot {
+			t.Fatalf("decimal not aligned for index %d: expected %d got %d", i, expectedDot, dot)
 		}
 	}
 }

@@ -1051,3 +1051,73 @@ func TestSyncDetailCallbacks(t *testing.T) {
 		t.Fatal("expected OnChownDetail not to be called when ownership is unchanged")
 	}
 }
+
+func TestSyncInodeAttrsIgnoreAtime(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	srcFile := filepath.Join(srcDir, "file.txt")
+	dstFile := filepath.Join(dstDir, "file.txt")
+
+	if err := os.WriteFile(srcFile, []byte("data"), 0644); err != nil {
+		t.Fatalf("failed to write src file: %v", err)
+	}
+
+	srcMod := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(srcFile, srcMod, srcMod); err != nil {
+		t.Fatalf("failed to set src times: %v", err)
+	}
+
+	if err := os.WriteFile(dstFile, []byte("data"), 0644); err != nil {
+		t.Fatalf("failed to write dst file: %v", err)
+	}
+	oldTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(dstFile, oldTime, oldTime); err != nil {
+		t.Fatalf("failed to set dst times: %v", err)
+	}
+
+	var (
+		chtimesCalled bool
+		beforeAt      time.Time
+		afterAt       time.Time
+		afterMt       time.Time
+		changedA      bool
+		changedM      bool
+	)
+
+	callbacks := Callbacks{
+		OnChtimesDetail: func(path string, bAt, bMt, aAt, aMt time.Time, cAt, cMt bool, err error) {
+			chtimesCalled = true
+			beforeAt = bAt
+			afterAt = aAt
+			afterMt = aMt
+			changedA = cAt
+			changedM = cMt
+		},
+	}
+
+	opts := Options{IgnoreAtime: true}
+	s := NewSynchronizerWithLoggerAndOptions(srcDir, dstDir, 1, false, callbacks, nil, opts)
+	if err := s.Run(); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	if !chtimesCalled {
+		t.Fatal("expected OnChtimesDetail to be called")
+	}
+	if beforeAt.IsZero() {
+		t.Fatal("expected before atime to be captured")
+	}
+	if changedA {
+		t.Fatal("expected atime change to be ignored")
+	}
+	if !changedM {
+		t.Fatal("expected mtime change to be reported")
+	}
+	if !afterAt.Equal(beforeAt) {
+		t.Fatalf("expected atime to be preserved, before %v after %v", beforeAt, afterAt)
+	}
+	if !afterMt.Equal(srcMod) {
+		t.Fatalf("expected mtime to match source %v, got %v", srcMod, afterMt)
+	}
+}
