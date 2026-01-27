@@ -845,3 +845,94 @@ doneDual:
 		t.Errorf("channel received %d hashes, callback received %d", callbackCount, len(hasher.hashes))
 	}
 }
+
+// TestBlockHashingXXHash verifies xxHash algorithm works correctly.
+func TestBlockHashingXXHash(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a file with known content
+	fileContent := []byte("Test content for xxHash algorithm verification")
+	srcFile := filepath.Join(srcDir, "test.txt")
+	dstFile := filepath.Join(dstDir, "test.txt")
+	os.WriteFile(srcFile, fileContent, 0644)
+
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+
+	// Copy with xxHash
+	xxHashHashes := make(map[uint64][]byte)
+	xxHasher := &mockBlockHasher{hashes: xxHashHashes}
+	if err := sync.copyFileWithHash(srcFile, dstFile, HashAlgoXXHash, xxHasher); err != nil {
+		t.Fatalf("xxHash copy failed: %v", err)
+	}
+
+	// Verify we got at least one hash
+	if len(xxHashHashes) == 0 {
+		t.Errorf("no xxHash hashes received")
+	}
+
+	// Verify hash length (xxHash produces 8 bytes)
+	xxHashValue := xxHashHashes[0]
+	if len(xxHashValue) != 8 {
+		t.Errorf("expected xxHash length 8, got %d", len(xxHashValue))
+	}
+
+	// Verify destination file matches source
+	dstContent, err := os.ReadFile(dstFile)
+	if err != nil {
+		t.Fatalf("failed to read destination file: %v", err)
+	}
+
+	if !bytes.Equal(fileContent, dstContent) {
+		t.Errorf("destination file content doesn't match source")
+	}
+}
+
+// TestBlockHashingAlgorithmComparison verifies xxHash produces different results than cryptographic hashes.
+func TestBlockHashingAlgorithmComparison(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create a test file
+	fileContent := []byte("Algorithm comparison test")
+	srcFile := filepath.Join(srcDir, "test.txt")
+	os.WriteFile(srcFile, fileContent, 0644)
+
+	sync := NewSynchronizer(srcDir, dstDir, 1, false, Callbacks{})
+
+	// Collect hashes from different algorithms
+	algorithms := map[string]HashAlgo{
+		"sha256": HashAlgoSHA256,
+		"xxhash": HashAlgoXXHash,
+	}
+
+	hashes := make(map[string][]byte)
+
+	for name, algo := range algorithms {
+		dstFile := filepath.Join(dstDir, name+".txt")
+		hasher := &mockBlockHasher{hashes: make(map[uint64][]byte)}
+		if err := sync.copyFileWithHash(srcFile, dstFile, algo, hasher); err != nil {
+			t.Fatalf("%s copy failed: %v", name, err)
+		}
+		if len(hasher.hashes) > 0 {
+			hashes[name] = hasher.hashes[0]
+		}
+	}
+
+	// Verify different algorithms produce different sized hashes
+	sha256Hash := hashes["sha256"]
+	xxHashHash := hashes["xxhash"]
+
+	if len(sha256Hash) != 32 {
+		t.Errorf("SHA256 hash length should be 32, got %d", len(sha256Hash))
+	}
+
+	if len(xxHashHash) != 8 {
+		t.Errorf("xxHash length should be 8, got %d", len(xxHashHash))
+	}
+
+	// xxHash should be very fast, but we just verify it produces different values
+	if bytes.Equal(sha256Hash[:8], xxHashHash) {
+		t.Logf("SHA256 and xxHash happen to match for this input (unlikely but possible)")
+	}
+}

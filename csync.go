@@ -42,6 +42,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 // Version is the current version of the csync package.
@@ -59,6 +61,8 @@ const (
 	HashAlgoSHA256 HashAlgo = "sha256"
 	// HashAlgoSHA512 uses SHA-512 hashing (512 bits)
 	HashAlgoSHA512 HashAlgo = "sha512"
+	// HashAlgoXXHash uses xxHash (64 bits, very fast)
+	HashAlgoXXHash HashAlgo = "xxhash"
 )
 
 // BlockHash represents the hash of a single 4K block.
@@ -545,6 +549,7 @@ func (s *Synchronizer) copyFileWithHashChannel(srcPath, dstPath string, algo Has
 
 	// Create hash function
 	var h hash.Hash
+	var xxHasher *xxhash.Digest
 	switch algo {
 	case HashAlgoMD5:
 		h = md5.New()
@@ -552,6 +557,8 @@ func (s *Synchronizer) copyFileWithHashChannel(srcPath, dstPath string, algo Has
 		h = sha256.New()
 	case HashAlgoSHA512:
 		h = sha512.New()
+	case HashAlgoXXHash:
+		xxHasher = xxhash.New()
 	default:
 		return fmt.Errorf("unsupported hash algorithm: %s", algo)
 	}
@@ -572,9 +579,16 @@ func (s *Synchronizer) copyFileWithHashChannel(srcPath, dstPath string, algo Has
 			}
 
 			// Hash the block
-			h.Reset()
-			h.Write(buffer[:n])
-			hashBytes := h.Sum(nil)
+			var hashBytes []byte
+			if xxHasher != nil {
+				xxHasher.Reset()
+				xxHasher.Write(buffer[:n])
+				hashBytes = xxHasher.Sum(nil)
+			} else {
+				h.Reset()
+				h.Write(buffer[:n])
+				hashBytes = h.Sum(nil)
+			}
 
 			blockHash := BlockHash{
 				BlockID: blockID,

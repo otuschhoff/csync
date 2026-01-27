@@ -248,10 +248,16 @@ For file integrity verification, csync supports optional block-based hashing dur
 
 ### Supported Algorithms
 
-- **`HashAlgoMD5`** - MD5 (128 bits, 16 bytes)
-- **`HashAlgoSHA256`** - SHA-256 (256 bits, 32 bytes)
-- **`HashAlgoSHA512`** - SHA-512 (512 bits, 64 bytes)
+- **`HashAlgoMD5`** - MD5 (128 bits, 16 bytes) - Cryptographic, widely compatible
+- **`HashAlgoSHA256`** - SHA-256 (256 bits, 32 bytes) - Cryptographic, secure
+- **`HashAlgoSHA512`** - SHA-512 (512 bits, 64 bytes) - Cryptographic, highest security
+- **`HashAlgoXXHash`** - xxHash (64 bits, 8 bytes) - Non-cryptographic, extremely fast
 - **`HashAlgoNone`** - Disable hashing (default)
+
+**Performance Considerations:**
+- xxHash is 10-20x faster than MD5 and suitable for integrity checking in non-adversarial scenarios
+- Cryptographic algorithms (MD5, SHA256, SHA512) are resistant to collision attacks but slower
+- Choose based on your security requirements and performance constraints
 
 ### Using Block Hashing
 
