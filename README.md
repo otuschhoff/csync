@@ -133,6 +133,11 @@ import (
 	"csync"
 )
 
+// Logger interface that csync expects
+// type Logger interface {
+//     Printf(format string, v ...interface{})
+// }
+
 // Adapter to use slog with csync
 type slogAdapter struct {
 	logger *slog.Logger
@@ -145,9 +150,19 @@ func (sa *slogAdapter) Printf(format string, v ...interface{}) {
 func main() {
 	srcDir := "/source"
 	dstDir := "/destination"
+	callbacks := csync.Callbacks{} // optional callbacks
 	
 	logger := &slogAdapter{logger: slog.Default()}
+	sync := csync.NewSynchronizerWithLogger(srcDir, dstDir, 4, false, callbacks, logger)
 	
+	if err := sync.Run(); err != nil {
+		log.Fatalf("Synchronization failed: %v", err)
+	}
+}
+```
+
+The `Logger` interface is simple - you only need to implement `Printf(format string, v ...interface{})`. This allows integration with any logging framework while keeping csync itself dependency-free.
+
 	// Use custom logger
 	sync := csync.NewSynchronizerWithLogger(srcDir, dstDir, 4, false, csync.Callbacks{}, logger)
 	if err := sync.Run(); err != nil {
@@ -490,3 +505,254 @@ for _, pair := range pairs {
 
 wg.Wait()
 ```
+
+## API Reference
+
+### Constants
+
+#### Hash Algorithms
+
+```go
+const (
+	HashAlgoNone   HashAlgo = ""        // Disable hashing
+	HashAlgoMD5    HashAlgo = "md5"     // MD5 (128 bits, 16 bytes)
+	HashAlgoSHA256 HashAlgo = "sha256"  // SHA-256 (256 bits, 32 bytes)
+	HashAlgoSHA512 HashAlgo = "sha512"  // SHA-512 (512 bits, 64 bytes)
+	HashAlgoXXHash HashAlgo = "xxhash"  // xxHash (64 bits, 8 bytes, very fast)
+)
+```
+
+#### Package Version
+
+```go
+const Version = "0.1.0"  // Current package version
+```
+
+### Types
+
+#### Synchronizer
+
+The main synchronizer for directory tree synchronization.
+
+```go
+type Synchronizer struct {
+	// Contains private fields
+}
+```
+
+**Methods:**
+
+- `Run() error` - Start synchronization and block until complete
+- `Stop()` - Cancel synchronization gracefully
+- `copyFileWithHash(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher) error` - Copy a file with optional block hashing using callback
+- `copyFileWithHashChannel(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher, hashChan chan<- BlockHash) error` - Copy a file with optional hashing via callback and/or channel
+
+#### Callbacks
+
+Struct defining optional hooks for monitoring synchronization operations.
+
+```go
+type Callbacks struct {
+	OnLstat        func(path string, isDir bool, fileInfo os.FileInfo, err error)
+	OnReadDir      func(path string, entries []os.DirEntry, err error)
+	OnCopy         func(srcPath, dstPath string, size int64, err error)
+	OnMkdir        func(path string, mode os.FileMode, err error)
+	OnUnlink       func(path string, err error)
+	OnRmdir        func(path string, err error)
+	OnRemoveAll    func(path string, err error)
+	OnSymlink      func(linkPath, target string, err error)
+	OnChmod        func(path string, mode os.FileMode, err error)
+	OnChown        func(path string, uid, gid int, err error)
+	OnChtimes      func(path string, err error)
+	OnFileCopyHash func(srcPath, dstPath string, blockHash BlockHash)
+}
+```
+
+All callback fields are optional; zero values are ignored.
+
+#### Logger
+
+Interface for custom logging implementations.
+
+```go
+type Logger interface {
+	Printf(format string, v ...interface{})
+}
+```
+
+Implementations should safely format and log messages. The default implementation wraps the standard `log` package.
+
+#### BlockHasher
+
+Interface for receiving block hashes during file copy operations.
+
+```go
+type BlockHasher interface {
+	HashBlock(blockID uint64, hash []byte) error
+}
+```
+
+- `blockID` is 0-indexed and incremented by the copy operation
+- `hash` contains the hash bytes; implementations should copy if they need to retain the value
+- Returning an error will abort the copy operation
+
+#### BlockHash
+
+Represents a single block hash during file copy.
+
+```go
+type BlockHash struct {
+	BlockID uint64  // 0-indexed block number
+	Hash    []byte  // Hash bytes (length depends on algorithm)
+}
+```
+
+#### HashAlgo
+
+String type specifying the hash algorithm to use.
+
+```go
+type HashAlgo string
+```
+
+Valid values: `HashAlgoNone`, `HashAlgoMD5`, `HashAlgoSHA256`, `HashAlgoSHA512`, `HashAlgoXXHash`
+
+### Functions
+
+#### NewSynchronizer
+
+Create a new synchronizer with default logging.
+
+```go
+func NewSynchronizer(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks) *Synchronizer
+```
+
+**Parameters:**
+- `srcRoot` - Source directory path
+- `dstRoot` - Destination directory path
+- `numWorkers` - Number of parallel workers (minimum 1; values ≤ 0 default to 1)
+- `readOnly` - If true, no modifications are made to the destination
+- `callbacks` - Optional callbacks for monitoring operations
+
+**Returns:** New Synchronizer instance
+
+#### NewSynchronizerWithLogger
+
+Create a new synchronizer with a custom logger.
+
+```go
+func NewSynchronizerWithLogger(srcRoot, dstRoot string, numWorkers int, readOnly bool, callbacks Callbacks, logger Logger) *Synchronizer
+```
+
+**Parameters:**
+- `srcRoot` - Source directory path
+- `dstRoot` - Destination directory path
+- `numWorkers` - Number of parallel workers (minimum 1; values ≤ 0 default to 1)
+- `readOnly` - If true, no modifications are made to the destination
+- `callbacks` - Optional callbacks for monitoring operations
+- `logger` - Custom Logger implementation; if nil, default logger is used
+
+**Returns:** New Synchronizer instance
+
+### Synchronizer Methods
+
+#### Run
+
+Start the synchronization process.
+
+```go
+func (s *Synchronizer) Run() error
+```
+
+Initializes a worker pool and processes the directory tree in parallel. This call blocks until all workers complete.
+
+**Returns:** Error if synchronization fails, nil on success
+
+#### Stop
+
+Cancel the synchronization process.
+
+```go
+func (s *Synchronizer) Stop()
+```
+
+Gracefully cancels the synchronization, causing workers to exit.
+
+#### copyFileWithHash
+
+Copy a file with optional callback-based block hashing.
+
+```go
+func (s *Synchronizer) copyFileWithHash(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher) error
+```
+
+**Parameters:**
+- `srcPath` - Source file path
+- `dstPath` - Destination file path
+- `algo` - Hash algorithm (HashAlgoNone to disable)
+- `hasher` - BlockHasher implementation for callback-based delivery; can be nil
+
+**Returns:** Error if copy fails or hasher returns error, nil on success
+
+#### copyFileWithHashChannel
+
+Copy a file with optional block hashing via callback, channel, or both.
+
+```go
+func (s *Synchronizer) copyFileWithHashChannel(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher, hashChan chan<- BlockHash) error
+```
+
+**Parameters:**
+- `srcPath` - Source file path
+- `dstPath` - Destination file path
+- `algo` - Hash algorithm (HashAlgoNone to disable)
+- `hasher` - BlockHasher implementation for callback-based delivery; can be nil
+- `hashChan` - Channel for hash delivery; can be nil
+  - Sends are non-blocking; if channel is full, sends are skipped
+  - Close the channel on your side after copy completes
+
+**Returns:** Error if copy fails or hasher returns error, nil on success
+
+**Note:** Both hasher callback and hashChan will receive the same block hashes if both are provided.
+
+### Behavior Details
+
+#### Read-Only Mode
+
+When `readOnly` is true:
+- No files, directories, or symlinks are created
+- No modifications are made to the destination
+- Callbacks are still invoked to allow monitoring of what *would* be done
+
+#### Work Stealing Load Balancing
+
+The synchronizer uses a work-stealing algorithm:
+- Each worker maintains a queue of directory branches
+- When a worker's queue is empty, it attempts to steal work from other workers
+- A worker steals items from other workers with >1 item in their queue
+- This ensures idle workers don't block when others have work available
+
+#### Inode Attribute Synchronization
+
+For all files and directories:
+- **Permissions** - File mode bits are synced via chmod
+- **Times** - Modification and access times are synced with nanosecond precision
+- **Ownership** - UID/GID are synced via chown (requires appropriate permissions)
+
+For symlinks:
+- **Targets** - Symlink targets are verified; mismatches cause removal and recreation
+- **Other attributes** - Symlink targets are compared; other symlink attributes follow system conventions
+
+Inode sync errors are logged but do not abort the synchronization.
+
+#### Block Hashing
+
+Files are processed in 4K blocks:
+- Partial blocks (at file end) are hashed as-is
+- Both producer and consumer maintain independent block ID counters from 0
+- Hash algorithms produce different output sizes:
+  - MD5: 16 bytes
+  - SHA256: 32 bytes
+  - SHA512: 64 bytes
+  - xxHash: 8 bytes
+- For xxHash, the 64-bit result is returned as 8 bytes
