@@ -140,6 +140,12 @@ type Callbacks struct {
 	// OnChtimes is called when changing modification/access times.
 	// Called with the path and any error encountered.
 	OnChtimes func(path string, err error)
+
+	// OnFileCopyHash is called for each block hash during file copy with hashing enabled.
+	// Called with the source path, destination path, and the block hash containing
+	// blockID (0-indexed) and hash bytes. Only called if hashing is enabled.
+	// srcPath and dstPath are provided for context; blockHash contains the blockID and hash.
+	OnFileCopyHash func(srcPath, dstPath string, blockHash BlockHash)
 }
 
 // Synchronizer syncs one directory tree to another.
@@ -498,18 +504,21 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 }
 
 // copyFileWithHash copies a file from source to destination with optional block-based hashing.
-// It reads the file in 4K blocks, optionally hashing each block, and sends hash values
-// to the BlockHasher callback if provided. Both producer (copyFileWithHash) and consumer
-// (BlockHasher) maintain independent block ID counters starting from 0.
+// It reads the file in 4K blocks, optionally hashing each block, and delivers hash values
+// via callback (hasher BlockHasher), channel (hashChan), or both. Both producer and consumer
+// maintain independent block ID counters starting from 0.
 //
 // Parameters:
 //   - srcPath: source file path
 //   - dstPath: destination file path
 //   - algo: hash algorithm to use (HashAlgoNone to disable hashing)
-//   - hasher: callback to receive block hashes (can be nil if algo is HashAlgoNone)
+//   - hasher: callback to receive block hashes (can be nil)
+//   - hashChan: optional channel to receive BlockHash values (can be nil)
+//     If provided, non-blocking send is attempted; if channel is full, hash is skipped
 //
-// Returns an error if the copy fails or if the hasher returns an error.
-func (s *Synchronizer) copyFileWithHash(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher) error {
+// Returns an error if the copy fails or if the hasher callback returns an error.
+// Channel sends are non-blocking and do not cause errors if the channel is full.
+func (s *Synchronizer) copyFileWithHashChannel(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher, hashChan chan<- BlockHash) error {
 	if s.readOnly {
 		return nil
 	}
@@ -529,7 +538,7 @@ func (s *Synchronizer) copyFileWithHash(srcPath, dstPath string, algo HashAlgo, 
 	const blockSize = 4096
 
 	// If no hashing requested, use simple io.Copy
-	if algo == HashAlgoNone || hasher == nil {
+	if algo == HashAlgoNone {
 		_, err = io.Copy(dstFile, srcFile)
 		return err
 	}
@@ -567,9 +576,25 @@ func (s *Synchronizer) copyFileWithHash(srcPath, dstPath string, algo HashAlgo, 
 			h.Write(buffer[:n])
 			hashBytes := h.Sum(nil)
 
-			// Send hash to consumer
-			if err := hasher.HashBlock(blockID, hashBytes); err != nil {
-				return fmt.Errorf("hash block callback failed for block %d: %w", blockID, err)
+			blockHash := BlockHash{
+				BlockID: blockID,
+				Hash:    hashBytes,
+			}
+
+			// Send hash to callback if provided
+			if hasher != nil {
+				if err := hasher.HashBlock(blockID, hashBytes); err != nil {
+					return fmt.Errorf("hash block callback failed for block %d: %w", blockID, err)
+				}
+			}
+
+			// Send hash to channel if provided (non-blocking)
+			if hashChan != nil {
+				select {
+				case hashChan <- blockHash:
+				default:
+					// Channel full, skip send (non-blocking behavior)
+				}
 			}
 
 			blockID++
@@ -581,6 +606,21 @@ func (s *Synchronizer) copyFileWithHash(srcPath, dstPath string, algo HashAlgo, 
 	}
 
 	return nil
+}
+
+// copyFileWithHash copies a file from source to destination with optional block-based hashing.
+// It reads the file in 4K blocks, optionally hashing each block, and delivers hashes via callback.
+// For channel-based delivery, use copyFileWithHashChannel.
+//
+// Parameters:
+//   - srcPath: source file path
+//   - dstPath: destination file path
+//   - algo: hash algorithm to use (HashAlgoNone to disable hashing)
+//   - hasher: callback to receive block hashes (can be nil if algo is HashAlgoNone)
+//
+// Returns an error if the copy fails or if the hasher returns an error.
+func (s *Synchronizer) copyFileWithHash(srcPath, dstPath string, algo HashAlgo, hasher BlockHasher) error {
+	return s.copyFileWithHashChannel(srcPath, dstPath, algo, hasher, nil)
 }
 
 // copyFile copies a file from source to destination.
