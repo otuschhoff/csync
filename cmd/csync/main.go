@@ -478,6 +478,12 @@ func getPrevTotal(prev statsSnapshot, name string) uint64 {
 // formatScaledUint renders an integer using scaled units (k, m, g, t...) with one decimal place.
 // Returns an empty string when the value is zero.
 func formatScaledUint(n uint64, suffix string) string {
+	if n == 0 {
+		return ""
+	}
+	if n < 1000 {
+		return fmt.Sprintf("%d%s", n, suffix)
+	}
 	return formatScaledFloat(float64(n), suffix)
 }
 
@@ -508,9 +514,10 @@ func alignDecimal(values []string) []string {
 		if v == "" {
 			continue
 		}
-		dot := strings.IndexByte(v, '.')
+		plain := stripANSI(v)
+		dot := strings.IndexByte(plain, '.')
 		if dot == -1 {
-			dot = len(v)
+			dot = len(plain)
 		}
 		if dot > maxInt {
 			maxInt = dot
@@ -523,9 +530,10 @@ func alignDecimal(values []string) []string {
 			out[i] = ""
 			continue
 		}
-		dot := strings.IndexByte(v, '.')
+		plain := stripANSI(v)
+		dot := strings.IndexByte(plain, '.')
 		if dot == -1 {
-			dot = len(v)
+			dot = len(plain)
 		}
 		pad := maxInt - dot
 		if pad > 0 {
@@ -535,6 +543,29 @@ func alignDecimal(values []string) []string {
 		}
 	}
 	return out
+}
+
+// stripANSI removes ANSI color sequences for alignment calculations.
+func stripANSI(s string) string {
+	if !strings.Contains(s, "\x1b[") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			i += 2
+			for i < len(s) {
+				c := s[i]
+				if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+					break
+				}
+				i++
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // formatCount formats an unsigned integer with thousands separators.

@@ -241,7 +241,7 @@ func TestFormatScaled(t *testing.T) {
 		expected string
 	}{
 		{0, "", ""},
-		{1, "", "1.0"},
+		{1, "", "1"},
 		{1500, "", "1.5k"},
 		{1_500_000_000, "", "1.5g"},
 	}
