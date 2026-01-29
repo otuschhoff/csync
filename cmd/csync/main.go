@@ -366,9 +366,9 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	t.Style().Color.Row = text.Colors{text.Reset}
 	t.SetColumnConfigs([]table.ColumnConfig{
 		{Number: 2, Align: text.AlignRight},
-		{Number: 3, Align: text.AlignRight},
-		{Number: 4, Align: text.AlignRight},
-		{Number: 5, Align: text.AlignRight},
+		{Number: 3, Align: text.AlignLeft},
+		{Number: 4, Align: text.AlignLeft},
+		{Number: 5, Align: text.AlignLeft},
 	})
 	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("%"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)")})
 
@@ -408,11 +408,11 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	if cur.bytes > 0 {
 		names = append(names, "bytes")
 		percents = append(percents, "")
-		totals = append(totals, formatScaledUint(cur.bytes, "B"))
-		avgs = append(avgs, formatScaledFloat(bytesRateTotal, "B/s"))
+		totals = append(totals, formatScaledBytesUint(cur.bytes))
+		avgs = append(avgs, formatScaledBytesFloat(bytesRateTotal, "/s"))
 
 		// Format bytes interval rate with conditional styling
-		bytesIntervalStr := formatScaledFloat(bytesRateInterval, "B/s")
+		bytesIntervalStr := formatScaledBytesFloat(bytesRateInterval, "/s")
 		if bytesRateTotal > 0 {
 			ratio := bytesRateInterval / bytesRateTotal
 			if ratio > 1.5 {
@@ -487,6 +487,18 @@ func formatScaledUint(n uint64, suffix string) string {
 	return formatScaledFloat(float64(n), suffix)
 }
 
+// formatScaledBytesUint renders a byte count using uppercase scaled units without a "B" suffix.
+// Returns an empty string when the value is zero.
+func formatScaledBytesUint(n uint64) string {
+	if n == 0 {
+		return ""
+	}
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return formatScaledBytesFloat(float64(n), "")
+}
+
 // formatScaledFloat renders a float using scaled units (k, m, g, t...) with one decimal place.
 // Returns an empty string when the value is zero.
 func formatScaledFloat(v float64, suffix string) string {
@@ -494,6 +506,26 @@ func formatScaledFloat(v float64, suffix string) string {
 		return ""
 	}
 	units := []string{"", "k", "m", "g", "t", "p", "e"}
+	idx := 0
+	abs := v
+	if abs < 0 {
+		abs = -abs
+	}
+	for abs >= 1000 && idx < len(units)-1 {
+		v /= 1000
+		abs /= 1000
+		idx++
+	}
+	return fmt.Sprintf("%.1f%s%s", v, units[idx], suffix)
+}
+
+// formatScaledBytesFloat renders a byte rate/size using uppercase units (K, M, G...) without a "B" suffix.
+// Returns an empty string when the value is zero.
+func formatScaledBytesFloat(v float64, suffix string) string {
+	if v == 0 {
+		return ""
+	}
+	units := []string{"", "K", "M", "G", "T", "P", "E"}
 	idx := 0
 	abs := v
 	if abs < 0 {
