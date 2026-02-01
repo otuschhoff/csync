@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -170,7 +171,8 @@ func main() {
 						}
 					}
 					if shouldLog("copy") {
-						logMsg("copy", fmt.Sprintf("%s -> %s (%s)", srcPath, dstPath, formatBytes(uint64(size))), err)
+						relPath, _ := filepath.Rel(src, srcPath)
+						logMsg("copy", fmt.Sprintf("%s (%s)", relPath, formatBytes(uint64(size))), err)
 					}
 				},
 				OnMkdir: func(path string, mode os.FileMode, err error) {
