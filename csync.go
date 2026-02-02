@@ -193,6 +193,9 @@ type Synchronizer struct {
 	workerMu   sync.Mutex
 	wg         sync.WaitGroup
 	shutdown   int32
+
+	rootReadOnce sync.Once
+	rootReadDone chan struct{}
 }
 
 // syncWorker represents a single worker processing directories.
@@ -302,16 +305,23 @@ func NewSynchronizerWithLoggerAndOptions(srcRoot, dstRoot string, numWorkers int
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Synchronizer{
-		srcRoot:    filepath.Clean(srcRoot),
-		dstRoot:    filepath.Clean(dstRoot),
-		callbacks:  callbacks,
-		readOnly:   readOnly,
-		logger:     logger,
-		options:    opts,
-		monitorCtx: ctx,
-		cancel:     cancel,
-		numWorkers: numWorkers,
+		srcRoot:      filepath.Clean(srcRoot),
+		dstRoot:      filepath.Clean(dstRoot),
+		callbacks:    callbacks,
+		readOnly:     readOnly,
+		logger:       logger,
+		options:      opts,
+		monitorCtx:   ctx,
+		cancel:       cancel,
+		numWorkers:   numWorkers,
+		rootReadDone: make(chan struct{}),
 	}
+}
+
+func (s *Synchronizer) signalRootRead() {
+	s.rootReadOnce.Do(func() {
+		close(s.rootReadDone)
+	})
 }
 
 // Run starts the synchronization process.
@@ -327,14 +337,26 @@ func (s *Synchronizer) Run() error {
 			synchronizer: s,
 		}
 		s.workers = append(s.workers, worker)
-		s.wg.Add(1)
-		go s.startWorker(worker)
 	}
 	s.workerMu.Unlock()
 
 	// Start with root directory
 	root := &syncBranch{}
 	s.workers[0].queuePush(root)
+
+	// Start worker 0 immediately
+	s.wg.Add(1)
+	go s.startWorker(s.workers[0])
+
+	// Wait until both source and destination roots have been read before starting others
+	<-s.rootReadDone
+
+	// Start remaining workers staggered
+	for i := 1; i < s.numWorkers; i++ {
+		s.wg.Add(1)
+		go s.startWorker(s.workers[i])
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	// Wait for all workers to finish
 	s.wg.Wait()
@@ -406,6 +428,10 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	}
 
 	if err != nil {
+		if branch.isRoot() {
+			_, _ = os.ReadDir(dstAbsPath)
+			w.synchronizer.signalRootRead()
+		}
 		return fmt.Errorf("readdir source '%s': %w", srcAbsPath, err)
 	}
 
@@ -451,6 +477,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 
 	// Build map of destination entries
 	dstEntries, _ := os.ReadDir(dstAbsPath)
+	if branch.isRoot() {
+		w.synchronizer.signalRootRead()
+	}
 	dstMap := make(map[string]os.DirEntry)
 	for _, entry := range dstEntries {
 		dstMap[entry.Name()] = entry

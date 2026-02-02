@@ -688,15 +688,32 @@ func printFinalStats(stats statsSnapshot, start time.Time) {
 	fmt.Println()
 	fmt.Println("Final Statistics:")
 	fmt.Printf("  Duration:           %v\n", elapsed)
-	fmt.Printf("  Inode count:        %d\n", stats.lstat)
-	fmt.Printf("  Directory count:    %d\n", stats.dirCount)
-	fmt.Printf("  Total data size:    %s\n", formatScaledBytesUint(stats.totalBytesScanned))
-	fmt.Printf("  Copied data size:   %s\n", formatScaledBytesUint(stats.bytes))
+	inodeCount := formatScaledUint(stats.lstat, "")
+	if inodeCount == "" {
+		inodeCount = "0"
+	}
+	dirCount := formatScaledUint(stats.dirCount, "")
+	if dirCount == "" {
+		dirCount = "0"
+	}
+	totalSize := formatScaledBytesUint(stats.totalBytesScanned)
+	if totalSize == "" {
+		totalSize = "0"
+	}
+	copySize := formatScaledBytesUint(stats.bytes)
+	if copySize == "" {
+		copySize = "0"
+	}
+
+	fmt.Printf("  Inode count:        %s\n", inodeCount)
+	fmt.Printf("  Directory count:    %s\n", dirCount)
+	fmt.Printf("  Total data size:    %s\n", totalSize)
+	fmt.Printf("  Copied data size:   %s\n", copySize)
 
 	if elapsed.Seconds() > 0 {
 		copySpeed := float64(stats.bytes) / elapsed.Seconds()
 		lstatSpeed := float64(stats.lstat) / elapsed.Seconds()
 		fmt.Printf("  Copy speed:         %s\n", formatScaledBytesFloat(copySpeed, "/s"))
-		fmt.Printf("  Inode scan speed:   %.1f inodes/s\n", lstatSpeed)
+		fmt.Printf("  Inode scan speed:   %s\n", formatScaledFloat(lstatSpeed, "/s"))
 	}
 }
