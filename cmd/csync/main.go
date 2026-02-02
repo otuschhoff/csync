@@ -400,15 +400,11 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		pct := ""
 		if r.name != "lstat" && lstatTotal > 0 {
 			percentage := (float64(r.total) * 100) / float64(lstatTotal)
-			if percentage > 0 && percentage < 0.05 {
-				pct = "<"
-			} else if percentage > 0 {
-				pct = fmt.Sprintf("%.1f%%", percentage)
-			}
+			pct = formatPercent(percentage)
 		}
 		percents = append(percents, pct)
 		totals = append(totals, formatScaledUint(r.total, ""))
-		avgs = append(avgs, formatScaledFloat(totalRate, "/s"))
+		avgs = append(avgs, formatAvgRate(totalRate, "/s"))
 
 		// Format interval rate with conditional styling
 		intervalStr := formatScaledFloat(intervalRate, "/s")
@@ -431,15 +427,11 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		bytesPct := ""
 		if cur.totalBytesScanned > 0 {
 			percentage := (float64(cur.bytes) * 100) / float64(cur.totalBytesScanned)
-			if percentage > 0 && percentage < 0.05 {
-				bytesPct = "<"
-			} else if percentage > 0 {
-				bytesPct = fmt.Sprintf("%.1f%%", percentage)
-			}
+			bytesPct = formatPercent(percentage)
 		}
 		percents = append(percents, bytesPct)
 		totals = append(totals, formatScaledBytesUint(cur.bytes))
-		avgs = append(avgs, formatScaledBytesFloat(bytesRateTotal, "/s"))
+		avgs = append(avgs, formatAvgBytesRate(bytesRateTotal, "/s"))
 
 		// Format bytes interval rate with conditional styling
 		bytesIntervalStr := formatScaledBytesFloat(bytesRateInterval, "/s")
@@ -567,6 +559,97 @@ func formatScaledBytesFloat(v float64, suffix string) string {
 		idx++
 	}
 	return fmt.Sprintf("%.1f%s%s", v, units[idx], suffix)
+}
+
+// formatPercent renders a percentage with %.1f%%, applying "<" for tiny values,
+// omitting leading zero for values < 1, and dimming the fractional part when
+// the integer part has two or more digits.
+func formatPercent(value float64) string {
+	if value <= 0 {
+		return ""
+	}
+	if value < 0.05 {
+		return text.FgHiBlack.Sprint("<")
+	}
+	formatted := fmt.Sprintf("%.1f%%", value)
+	return stylizeFraction(omitLeadingZero(formatted))
+}
+
+// formatAvgRate renders a scaled rate with "/s" suffix and the same styling rules as percentages.
+func formatAvgRate(value float64, suffix string) string {
+	if value <= 0 {
+		return ""
+	}
+	if value < 0.05 {
+		return text.FgHiBlack.Sprint("<")
+	}
+	formatted := formatScaledFloat(value, suffix)
+	return stylizeFraction(omitLeadingZero(formatted))
+}
+
+// formatAvgBytesRate renders a scaled byte rate with "/s" suffix and the same styling rules.
+func formatAvgBytesRate(value float64, suffix string) string {
+	if value <= 0 {
+		return ""
+	}
+	if value < 0.05 {
+		return text.FgHiBlack.Sprint("<")
+	}
+	formatted := formatScaledBytesFloat(value, suffix)
+	return stylizeFraction(omitLeadingZero(formatted))
+}
+
+// omitLeadingZero removes a leading "0" for values like "0.5" or "0.5/s".
+func omitLeadingZero(s string) string {
+	if strings.HasPrefix(s, "0.") {
+		return s[1:]
+	}
+	return s
+}
+
+// stylizeFraction dims the fractional part when the integer part has two or more digits.
+// It keeps alignment intact by only coloring the fractional segment.
+func stylizeFraction(s string) string {
+	plain := stripANSI(s)
+	dot := strings.IndexByte(plain, '.')
+	if dot == -1 {
+		return s
+	}
+	intPart := plain[:dot]
+	if len(intPart) < 2 {
+		return s
+	}
+	// Find the fractional segment in the original string, preserving ANSI.
+	// We locate the dot in the original by accounting for ANSI sequences.
+	index := indexInStyled(s, dot)
+	if index == -1 || index >= len(s) {
+		return s
+	}
+	// Split on the dot in the styled string.
+	return s[:index] + text.FgHiBlack.Sprint(s[index:])
+}
+
+// indexInStyled maps an index in the plain string to the styled string index.
+func indexInStyled(styled string, plainIndex int) int {
+	pi := 0
+	for i := 0; i < len(styled); i++ {
+		if styled[i] == '\x1b' && i+1 < len(styled) && styled[i+1] == '[' {
+			i += 2
+			for i < len(styled) {
+				c := styled[i]
+				if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+					break
+				}
+				i++
+			}
+			continue
+		}
+		if pi == plainIndex {
+			return i
+		}
+		pi++
+	}
+	return -1
 }
 
 // alignDecimal pads values so their decimal points line up in a column.
