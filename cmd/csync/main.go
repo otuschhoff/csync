@@ -20,48 +20,54 @@ import (
 
 // statsCollector aggregates operation counts and byte totals using atomic operations.
 type statsCollector struct {
-	lstat     atomic.Uint64
-	readdir   atomic.Uint64
-	mkdir     atomic.Uint64
-	unlink    atomic.Uint64
-	removeAll atomic.Uint64
-	symlink   atomic.Uint64
-	chmod     atomic.Uint64
-	chown     atomic.Uint64
-	chtimes   atomic.Uint64
-	copies    atomic.Uint64
-	bytes     atomic.Uint64
+	lstat             atomic.Uint64
+	readdir           atomic.Uint64
+	mkdir             atomic.Uint64
+	unlink            atomic.Uint64
+	removeAll         atomic.Uint64
+	symlink           atomic.Uint64
+	chmod             atomic.Uint64
+	chown             atomic.Uint64
+	chtimes           atomic.Uint64
+	copies            atomic.Uint64
+	bytes             atomic.Uint64
+	totalBytesScanned atomic.Uint64
+	dirCount          atomic.Uint64
 }
 
 // statsSnapshot captures a point-in-time view of collected statistics.
 type statsSnapshot struct {
-	lstat     uint64
-	readdir   uint64
-	mkdir     uint64
-	unlink    uint64
-	removeAll uint64
-	symlink   uint64
-	chmod     uint64
-	chown     uint64
-	chtimes   uint64
-	copies    uint64
-	bytes     uint64
+	lstat             uint64
+	readdir           uint64
+	mkdir             uint64
+	unlink            uint64
+	removeAll         uint64
+	symlink           uint64
+	chmod             uint64
+	chown             uint64
+	chtimes           uint64
+	copies            uint64
+	bytes             uint64
+	totalBytesScanned uint64
+	dirCount          uint64
 }
 
 // snapshot returns a consistent view of current stats at a given moment.
 func (s *statsCollector) snapshot() statsSnapshot {
 	return statsSnapshot{
-		lstat:     s.lstat.Load(),
-		readdir:   s.readdir.Load(),
-		mkdir:     s.mkdir.Load(),
-		unlink:    s.unlink.Load(),
-		removeAll: s.removeAll.Load(),
-		symlink:   s.symlink.Load(),
-		chmod:     s.chmod.Load(),
-		chown:     s.chown.Load(),
-		chtimes:   s.chtimes.Load(),
-		copies:    s.copies.Load(),
-		bytes:     s.bytes.Load(),
+		lstat:             s.lstat.Load(),
+		readdir:           s.readdir.Load(),
+		mkdir:             s.mkdir.Load(),
+		unlink:            s.unlink.Load(),
+		removeAll:         s.removeAll.Load(),
+		symlink:           s.symlink.Load(),
+		chmod:             s.chmod.Load(),
+		chown:             s.chown.Load(),
+		chtimes:           s.chtimes.Load(),
+		copies:            s.copies.Load(),
+		bytes:             s.bytes.Load(),
+		totalBytesScanned: s.totalBytesScanned.Load(),
+		dirCount:          s.dirCount.Load(),
 	}
 }
 
@@ -150,6 +156,11 @@ func main() {
 				OnLstat: func(path string, isDir bool, fileInfo os.FileInfo, err error) {
 					if err == nil {
 						stats.lstat.Add(1)
+						if isDir {
+							stats.dirCount.Add(1)
+						} else if fileInfo != nil {
+							stats.totalBytesScanned.Add(uint64(fileInfo.Size()))
+						}
 					}
 					if shouldLog("lstat") {
 						logMsg("lstat", path, err)
@@ -274,6 +285,9 @@ func main() {
 			err := syncer.Run()
 			if statsFlag {
 				close(done)
+				// Print final stats
+				finalStats := stats.snapshot()
+				printFinalStats(finalStats, start)
 			}
 			return err
 		},
@@ -385,7 +399,12 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		names = append(names, r.name)
 		pct := ""
 		if r.name != "lstat" && lstatTotal > 0 {
-			pct = fmt.Sprintf("%d%%", (r.total*100)/lstatTotal)
+			percentage := (float64(r.total) * 100) / float64(lstatTotal)
+			if percentage > 0 && percentage < 0.05 {
+				pct = "<"
+			} else if percentage > 0 {
+				pct = fmt.Sprintf("%.1f%%", percentage)
+			}
 		}
 		percents = append(percents, pct)
 		totals = append(totals, formatScaledUint(r.total, ""))
@@ -409,7 +428,16 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	bytesRateInterval := float64(cur.bytes-prevBytes) / interval
 	if cur.bytes > 0 {
 		names = append(names, "bytes")
-		percents = append(percents, "")
+		bytesPct := ""
+		if cur.totalBytesScanned > 0 {
+			percentage := (float64(cur.bytes) * 100) / float64(cur.totalBytesScanned)
+			if percentage > 0 && percentage < 0.05 {
+				bytesPct = "<"
+			} else if percentage > 0 {
+				bytesPct = fmt.Sprintf("%.1f%%", percentage)
+			}
+		}
+		percents = append(percents, bytesPct)
 		totals = append(totals, formatScaledBytesUint(cur.bytes))
 		avgs = append(avgs, formatScaledBytesFloat(bytesRateTotal, "/s"))
 
@@ -651,4 +679,24 @@ func formatBytesRate(rate float64) string {
 		idx++
 	}
 	return fmt.Sprintf("%.2f %s", v, units[idx])
+}
+
+// printFinalStats displays comprehensive final statistics after sync completion.
+func printFinalStats(stats statsSnapshot, start time.Time) {
+	elapsed := time.Since(start)
+
+	fmt.Println()
+	fmt.Println("Final Statistics:")
+	fmt.Printf("  Duration:           %v\n", elapsed)
+	fmt.Printf("  Inode count:        %d\n", stats.lstat)
+	fmt.Printf("  Directory count:    %d\n", stats.dirCount)
+	fmt.Printf("  Total data size:    %s\n", formatScaledBytesUint(stats.totalBytesScanned))
+	fmt.Printf("  Copied data size:   %s\n", formatScaledBytesUint(stats.bytes))
+
+	if elapsed.Seconds() > 0 {
+		copySpeed := float64(stats.bytes) / elapsed.Seconds()
+		lstatSpeed := float64(stats.lstat) / elapsed.Seconds()
+		fmt.Printf("  Copy speed:         %s\n", formatScaledBytesFloat(copySpeed, "/s"))
+		fmt.Printf("  Inode scan speed:   %.1f inodes/s\n", lstatSpeed)
+	}
 }
