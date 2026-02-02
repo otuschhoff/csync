@@ -630,33 +630,35 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 		}
 	}
 
-	// Sync modification and access times
-	modTime := srcInfo.ModTime()
-	changedAtime := beforeAtime.IsZero() || !beforeAtime.Equal(modTime)
-	if s.options.IgnoreAtime {
-		changedAtime = false
-	}
-	changedMtime := beforeMtime.IsZero() || !beforeMtime.Equal(modTime)
-	if changedAtime || changedMtime {
-		atimeToSet := modTime
-		if s.options.IgnoreAtime && !beforeAtime.IsZero() {
-			atimeToSet = beforeAtime
+	// Sync modification and access times (only for regular files)
+	if srcInfo.Mode().IsRegular() {
+		modTime := srcInfo.ModTime()
+		changedAtime := beforeAtime.IsZero() || !beforeAtime.Equal(modTime)
+		if s.options.IgnoreAtime {
+			changedAtime = false
 		}
-		if err := os.Chtimes(dstPath, atimeToSet, modTime); err != nil {
-			// Log but don't fail
-			s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
-			if s.callbacks.OnChtimes != nil {
-				s.callbacks.OnChtimes(dstPath, err)
+		changedMtime := beforeMtime.IsZero() || !beforeMtime.Equal(modTime)
+		if changedAtime || changedMtime {
+			atimeToSet := modTime
+			if s.options.IgnoreAtime && !beforeAtime.IsZero() {
+				atimeToSet = beforeAtime
 			}
-			if s.callbacks.OnChtimesDetail != nil {
-				s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, err)
-			}
-		} else {
-			if s.callbacks.OnChtimes != nil {
-				s.callbacks.OnChtimes(dstPath, nil)
-			}
-			if s.callbacks.OnChtimesDetail != nil {
-				s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, nil)
+			if err := os.Chtimes(dstPath, atimeToSet, modTime); err != nil {
+				// Log but don't fail
+				s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
+				if s.callbacks.OnChtimes != nil {
+					s.callbacks.OnChtimes(dstPath, err)
+				}
+				if s.callbacks.OnChtimesDetail != nil {
+					s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, err)
+				}
+			} else {
+				if s.callbacks.OnChtimes != nil {
+					s.callbacks.OnChtimes(dstPath, nil)
+				}
+				if s.callbacks.OnChtimesDetail != nil {
+					s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, nil)
+				}
 			}
 		}
 	}
