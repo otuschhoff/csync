@@ -170,15 +170,11 @@ func (s *statsCollector) snapshot() statsSnapshot {
 				}
 				if st.SideDst {
 					snap.workersCopyDst++
-				// Count this worker if it's on a destination operation
-				if st.SideDst {
-					snap.totalDstWorkers++
 				}
-								// Count this worker if it's on a destination operation
-								if st.SideDst {
-									snap.totalDstWorkers++
-								}
-				}
+			}
+			// Count this worker if it's on a destination operation
+			if st.SideDst {
+				snap.totalDstWorkers++
 			}
 		}
 	}
