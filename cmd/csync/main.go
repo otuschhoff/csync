@@ -34,6 +34,8 @@ type statsCollector struct {
 	totalBytesScanned atomic.Uint64
 	deletedBytes      atomic.Uint64
 	dirCount          atomic.Uint64
+	idle              atomic.Uint64
+	steal             atomic.Uint64
 	// Reference to synchronizer for accessing in-progress operation counts
 	synchronizer *csync.Synchronizer
 }
@@ -54,6 +56,8 @@ type statsSnapshot struct {
 	totalBytesScanned uint64
 	deletedBytes      uint64
 	dirCount          uint64
+	idle              uint64
+	steal             uint64
 	// Workers concurrency tracking
 	workersLstatSrc     uint64
 	workersLstatDst     uint64
@@ -75,6 +79,7 @@ type statsSnapshot struct {
 	workersChtimesDst   uint64
 	workersCopySrc      uint64
 	workersCopyDst      uint64
+	workersIdle         uint64 // Current number of idle workers
 	totalDstWorkers     uint64 // Total count of workers currently on destination operations
 }
 
@@ -95,9 +100,13 @@ func (s *statsCollector) snapshot() statsSnapshot {
 		totalBytesScanned: s.totalBytesScanned.Load(),
 		deletedBytes:      s.deletedBytes.Load(),
 		dirCount:          s.dirCount.Load(),
+		idle:              s.idle.Load(),
+		steal:             s.steal.Load(),
 	}
 	// Get per-op source/destination counts from worker states
 	if s.synchronizer != nil {
+		snap.idle = s.synchronizer.GetIdleCount()
+		snap.steal = s.synchronizer.GetStealCount()
 		states := s.synchronizer.GetWorkerStates()
 		for _, st := range states {
 			switch st.Operation {
@@ -171,6 +180,10 @@ func (s *statsCollector) snapshot() statsSnapshot {
 				if st.SideDst {
 					snap.workersCopyDst++
 				}
+			}
+			// Count idle workers
+			if st.State == "idle" {
+				snap.workersIdle++
 			}
 			// Count this worker if it's on a destination operation
 			if st.SideDst {
@@ -515,11 +528,10 @@ func printWorkerStatsTable(states []csync.WorkerState) {
 		{Number: 3, Align: text.AlignLeft},
 		{Number: 4, Align: text.AlignLeft},
 		{Number: 5, Align: text.AlignLeft},
-		{Number: 6, Align: text.AlignLeft},
+		{Number: 6, Align: text.AlignRight},
 		{Number: 7, Align: text.AlignRight},
-		{Number: 8, Align: text.AlignRight},
 	})
-	t.AppendHeader(table.Row{text.Bold.Sprint("Worker"), text.Bold.Sprint("State"), text.Bold.Sprint("Operation"), text.Bold.Sprint("S"), text.Bold.Sprint("D"), text.Bold.Sprint("Path"), text.Bold.Sprint("Duration"), text.Bold.Sprint("Queue")})
+	t.AppendHeader(table.Row{text.Bold.Sprint("Worker"), text.Bold.Sprint("Operation"), text.Bold.Sprint("S"), text.Bold.Sprint("D"), text.Bold.Sprint("Path"), text.Bold.Sprint("Duration"), text.Bold.Sprint("Queue")})
 
 	for _, st := range states {
 		duration := fmt.Sprintf("%dms", st.Duration.Milliseconds())
@@ -541,7 +553,6 @@ func printWorkerStatsTable(states []csync.WorkerState) {
 		}
 		t.AppendRow(table.Row{
 			st.ID,
-			st.State,
 			st.Operation,
 			sideSrc,
 			sideDst,
@@ -552,17 +563,6 @@ func printWorkerStatsTable(states []csync.WorkerState) {
 	}
 
 	t.Render()
-
-	// Count and display total destination workers
-	var dstWorkerCount int
-	for _, st := range states {
-		if st.SideDst {
-			dstWorkerCount++
-		}
-	}
-	if dstWorkerCount > 0 {
-		fmt.Printf("  Destination Workers: %d\n", dstWorkerCount)
-	}
 }
 
 // printStatsTable formats and renders a stats table with operation counts and rates.
@@ -590,6 +590,8 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		{"chown", cur.chown},
 		{"chtimes", cur.chtimes},
 		{"copy", cur.copies},
+		{"idle", cur.idle},
+		{"steal", cur.steal},
 	}
 
 	var names []string
@@ -754,6 +756,11 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 			if cur.workersCopyDst > 0 {
 				dstWorkersStr = formatScaledUint(cur.workersCopyDst, "")
 			}
+		case "idle":
+			// Show current idle workers count
+			if cur.workersIdle > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersIdle, "")
+			}
 		}
 		t.AppendRow(table.Row{
 			text.Bold.Sprint(name),
@@ -792,6 +799,10 @@ func getPrevTotal(prev statsSnapshot, name string) uint64 {
 		return prev.chtimes
 	case "copy":
 		return prev.copies
+	case "idle":
+		return prev.idle
+	case "steal":
+		return prev.steal
 	default:
 		return 0
 	}

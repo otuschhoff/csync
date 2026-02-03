@@ -230,6 +230,10 @@ type Synchronizer struct {
 	inProgressChown     atomic.Uint64
 	inProgressChtimes   atomic.Uint64
 	inProgressCopy      atomic.Uint64
+
+	// Event counters
+	idleCount  atomic.Uint64
+	stealCount atomic.Uint64
 }
 
 // syncWorker represents a single worker processing directories.
@@ -339,12 +343,14 @@ func (sw *syncWorker) setIdle() {
 	sw.stateMu.Lock()
 	defer sw.stateMu.Unlock()
 	sw.state = workerStateInternal{state: "idle"}
+	sw.synchronizer.idleCount.Add(1)
 }
 
 func (sw *syncWorker) setSteal() {
 	sw.stateMu.Lock()
 	defer sw.stateMu.Unlock()
 	sw.state = workerStateInternal{state: "steal", started: time.Now()}
+	sw.synchronizer.stealCount.Add(1)
 }
 
 func (sw *syncWorker) setBranch(path string) {
@@ -618,6 +624,16 @@ func (s *Synchronizer) GetWorkerStates() []WorkerState {
 		states = append(states, worker.snapshotState())
 	}
 	return states
+}
+
+// GetIdleCount returns the total number of times workers entered idle state
+func (s *Synchronizer) GetIdleCount() uint64 {
+	return s.idleCount.Load()
+}
+
+// GetStealCount returns the total number of work steal attempts
+func (s *Synchronizer) GetStealCount() uint64 {
+	return s.stealCount.Load()
 }
 
 func (s *Synchronizer) logSlowOps() {
