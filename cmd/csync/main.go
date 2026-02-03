@@ -612,7 +612,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		{Number: 6, Align: text.AlignRight},
 		{Number: 7, Align: text.AlignRight},
 	})
-	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("%"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)"), text.Bold.Sprint("Workers (Src)"), text.Bold.Sprint("(Dst)")})
+	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("%"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Interval"), text.Bold.Sprint("Workers (Src)"), text.Bold.Sprint("(Dst)")})
 
 	lstatTotal := cur.lstat
 	for _, r := range rows {
@@ -633,7 +633,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		avgs = append(avgs, formatAvgRate(totalRate, "/s"))
 
 		// Format interval rate with conditional styling
-		intervalStr := formatScaledFloat(intervalRate, "/s")
+		intervalStr := stylizeFraction(omitLeadingZero(formatScaledFloat(intervalRate, "")))
 		if totalRate > 0 {
 			ratio := intervalRate / totalRate
 			if ratio > 1.5 {
@@ -660,7 +660,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		avgs = append(avgs, formatAvgBytesRate(bytesRateTotal, "/s"))
 
 		// Format bytes interval rate with conditional styling
-		bytesIntervalStr := formatScaledBytesFloat(bytesRateInterval, "/s")
+		bytesIntervalStr := stylizeFraction(omitLeadingZero(formatScaledBytesFloat(bytesRateInterval, "")))
 		if bytesRateTotal > 0 {
 			ratio := bytesRateInterval / bytesRateTotal
 			if ratio > 1.5 {
