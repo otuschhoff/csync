@@ -497,11 +497,25 @@ func (s *Synchronizer) startOp(worker *syncWorker, opName, path string) {
 	s.trackOpStart(opName)
 }
 
+func (s *Synchronizer) startOpSide(worker *syncWorker, opName, path string, sideSrc, sideDst bool) {
+	if worker != nil {
+		worker.beginOp(opName, path, sideSrc, sideDst)
+	}
+	s.trackOpStart(opName)
+}
+
+func (s *Synchronizer) startSrcOp(worker *syncWorker, opName, path string) {
+	s.startOpSide(worker, opName, path, true, false)
+}
+
+func (s *Synchronizer) startDstOp(worker *syncWorker, opName, path string) {
+	s.startOpSide(worker, opName, path, false, true)
+}
+
 func (s *Synchronizer) startCopyOp(worker *syncWorker, srcPath, dstPath string) {
 	if worker != nil {
-		sideSrc := s.isUnderRoot(srcPath, s.srcRoot)
-		sideDst := s.isUnderRoot(dstPath, s.dstRoot)
-		worker.beginOp("copy", srcPath, sideSrc, sideDst)
+		s.startOpSide(worker, "copy", srcPath, true, true)
+		return
 	}
 	s.trackOpStart("copy")
 }
@@ -745,7 +759,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	dstAbsPath := branch.dstAbsPath(w.synchronizer.dstRoot)
 
 	// ReadDir source (collects stat info for entries internally)
-	w.synchronizer.startOp(w, "readdir", srcAbsPath)
+	w.synchronizer.startSrcOp(w, "readdir", srcAbsPath)
 	srcEntries, err := os.ReadDir(srcAbsPath)
 	w.synchronizer.endOp(w, "readdir")
 	if w.synchronizer.callbacks.OnSrcReadDir != nil {
@@ -766,7 +780,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	if w.synchronizer.callbacks.OnSrcLstat != nil {
 		for _, entry := range srcEntries {
 			entryPath := filepath.Join(srcAbsPath, entry.Name())
-			w.synchronizer.startOp(w, "lstat", entryPath)
+			w.synchronizer.startSrcOp(w, "lstat", entryPath)
 			info, infoErr := entry.Info()
 			w.synchronizer.endOp(w, "lstat")
 			w.synchronizer.callbacks.OnSrcLstat(filepath.Join(srcAbsPath, entry.Name()), entry.IsDir(), info, infoErr)
@@ -780,7 +794,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	// Always track lstat for source entries
 	for _, entry := range srcEntries {
 		entryPath := filepath.Join(srcAbsPath, entry.Name())
-		w.synchronizer.startOp(w, "lstat", entryPath)
+		w.synchronizer.startSrcOp(w, "lstat", entryPath)
 		info, infoErr := entry.Info()
 		w.synchronizer.endOp(w, "lstat")
 		if infoErr == nil {
@@ -798,7 +812,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			return nil, err
 		}
 		entryPath := filepath.Join(srcAbsPath, name)
-		w.synchronizer.startOp(w, "lstat", entryPath)
+		w.synchronizer.startSrcOp(w, "lstat", entryPath)
 		info, err := os.Lstat(entryPath)
 		w.synchronizer.endOp(w, "lstat")
 		if w.synchronizer.callbacks.OnSrcLstat != nil {
@@ -813,7 +827,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	}
 
 	// Build map of destination entries
-	w.synchronizer.startOp(w, "readdir", dstAbsPath)
+	w.synchronizer.startDstOp(w, "readdir", dstAbsPath)
 	dstEntries, dstReadErr := os.ReadDir(dstAbsPath)
 	w.synchronizer.endOp(w, "readdir")
 	if w.synchronizer.callbacks.OnDstReadDir != nil {
@@ -828,7 +842,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	if w.synchronizer.callbacks.OnDstLstat != nil {
 		for _, entry := range dstEntries {
 			entryPath := filepath.Join(dstAbsPath, entry.Name())
-			w.synchronizer.startOp(w, "lstat", entryPath)
+			w.synchronizer.startDstOp(w, "lstat", entryPath)
 			info, infoErr := entry.Info()
 			w.synchronizer.endOp(w, "lstat")
 			w.synchronizer.callbacks.OnDstLstat(entryPath, entry.IsDir(), info, infoErr)
@@ -867,7 +881,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 				if !w.synchronizer.readOnly {
 					srcInfo, _ := getSrcInfo(srcName)
 					mode := srcInfo.Mode().Perm()
-					w.synchronizer.startOp(w, "mkdir", dstChildPath)
+					w.synchronizer.startDstOp(w, "mkdir", dstChildPath)
 					err := os.Mkdir(dstChildPath, mode)
 					w.synchronizer.endOp(w, "mkdir")
 					if w.synchronizer.callbacks.OnDstMkdir != nil {
@@ -915,7 +929,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 
 			if !dstExists {
 				if !w.synchronizer.readOnly {
-					w.synchronizer.startOp(w, "symlink", dstChildPath)
+					w.synchronizer.startDstOp(w, "symlink", dstChildPath)
 					err := os.Symlink(linkTarget, dstChildPath)
 					w.synchronizer.endOp(w, "symlink")
 					if w.synchronizer.callbacks.OnDstSymlink != nil {
@@ -938,7 +952,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			shouldCopy := !dstExists
 			if !shouldCopy {
 				srcInfo, _ := getSrcInfo(srcName)
-				w.synchronizer.startOp(w, "lstat", dstChildPath)
+				w.synchronizer.startDstOp(w, "lstat", dstChildPath)
 				dstInfo, _ := os.Lstat(dstChildPath)
 				w.synchronizer.endOp(w, "lstat")
 				if w.synchronizer.callbacks.OnDstLstat != nil && dstInfo != nil {
@@ -1027,7 +1041,7 @@ func (s *Synchronizer) syncInodeAttrs(worker *syncWorker, srcPath, dstPath strin
 	// Sync permissions (mode)
 	mode := srcInfo.Mode().Perm()
 	if beforeMode != mode {
-		s.startOp(worker, "chmod", dstPath)
+		s.startDstOp(worker, "chmod", dstPath)
 		if err := os.Chmod(dstPath, mode); err != nil {
 			s.endOp(worker, "chmod")
 			// Log but don't fail
@@ -1062,7 +1076,7 @@ func (s *Synchronizer) syncInodeAttrs(worker *syncWorker, srcPath, dstPath strin
 			if s.options.IgnoreAtime && !beforeAtime.IsZero() {
 				atimeToSet = beforeAtime
 			}
-			s.startOp(worker, "chtimes", dstPath)
+			s.startDstOp(worker, "chtimes", dstPath)
 			if err := os.Chtimes(dstPath, atimeToSet, modTime); err != nil {
 				s.endOp(worker, "chtimes")
 				// Log but don't fail
@@ -1092,7 +1106,7 @@ func (s *Synchronizer) syncInodeAttrs(worker *syncWorker, srcPath, dstPath strin
 		uid := int(stat.Uid)
 		gid := int(stat.Gid)
 		if beforeUID != uid || beforeGID != gid {
-			s.startOp(worker, "chown", dstPath)
+			s.startDstOp(worker, "chown", dstPath)
 			if err := os.Chown(dstPath, uid, gid); err != nil {
 				s.endOp(worker, "chown")
 				// Log but don't fail (non-root users typically can't chown)
@@ -1231,7 +1245,7 @@ func (s *Synchronizer) unlink(worker *syncWorker, path string) error {
 		return nil
 	}
 
-	s.startOp(worker, "unlink", path)
+	s.startDstOp(worker, "unlink", path)
 	err := os.Remove(path)
 	s.endOp(worker, "unlink")
 	if s.callbacks.OnDstUnlink != nil {
@@ -1247,7 +1261,7 @@ func (s *Synchronizer) unlinkWithSize(worker *syncWorker, path string, size int6
 		return nil
 	}
 
-	s.startOp(worker, "unlink", path)
+	s.startDstOp(worker, "unlink", path)
 	err := os.Remove(path)
 	s.endOp(worker, "unlink")
 	if s.callbacks.OnDstUnlink != nil {
@@ -1267,7 +1281,7 @@ func (s *Synchronizer) removeAll(worker *syncWorker, path string) error {
 		return nil
 	}
 
-	s.startOp(worker, "removeall", path)
+	s.startDstOp(worker, "removeall", path)
 	err := os.RemoveAll(path)
 	s.endOp(worker, "removeall")
 	if s.callbacks.OnDstRemoveAll != nil {
@@ -1283,7 +1297,7 @@ func (s *Synchronizer) removeAllWithSize(worker *syncWorker, path string, size i
 		return nil
 	}
 
-	s.startOp(worker, "removeall", path)
+	s.startDstOp(worker, "removeall", path)
 	err := os.RemoveAll(path)
 	s.endOp(worker, "removeall")
 	if s.callbacks.OnDstRemoveAll != nil {
