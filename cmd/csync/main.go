@@ -759,7 +759,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		case "idle":
 			// Show current idle workers count
 			if cur.workersIdle > 0 {
-				dstWorkersStr = formatScaledUint(cur.workersIdle, "")
+				workersStr = formatScaledUint(cur.workersIdle, "")
 			}
 		}
 		t.AppendRow(table.Row{
