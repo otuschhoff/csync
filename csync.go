@@ -179,6 +179,11 @@ type Options struct {
 	// IgnoreAtime skips considering atime differences when deciding whether to
 	// call Chtimes and preserves existing atime when possible.
 	IgnoreAtime bool
+	// LogSlowOps logs when an operation takes longer than 1 second.
+	LogSlowOps bool
+	// SlowOpInterval controls how often slow operations are logged.
+	// Defaults to 1s when LogSlowOps is enabled.
+	SlowOpInterval time.Duration
 }
 
 // Synchronizer syncs one directory tree to another.
@@ -227,6 +232,28 @@ type syncWorker struct {
 	synchronizer *Synchronizer
 	queue        []*syncBranch
 	mu           sync.Mutex
+	stateMu      sync.Mutex
+	state        workerStateInternal
+}
+
+type workerStateInternal struct {
+	state    string
+	op       string
+	path     string
+	branch   string
+	started  time.Time
+	lastSlow time.Time
+}
+
+// WorkerState exposes the current state of a worker for monitoring.
+type WorkerState struct {
+	ID        int
+	State     string
+	Operation string
+	Path      string
+	Since     time.Time
+	Duration  time.Duration
+	QueueLen  int
 }
 
 // syncBranch represents a directory node in the sync tree.
@@ -296,6 +323,94 @@ func (sw *syncWorker) queuePop() *syncBranch {
 	return nil
 }
 
+func (sw *syncWorker) setIdle() {
+	sw.stateMu.Lock()
+	defer sw.stateMu.Unlock()
+	sw.state = workerStateInternal{state: "idle"}
+}
+
+func (sw *syncWorker) setSteal() {
+	sw.stateMu.Lock()
+	defer sw.stateMu.Unlock()
+	sw.state = workerStateInternal{state: "steal", started: time.Now()}
+}
+
+func (sw *syncWorker) setBranch(path string) {
+	sw.stateMu.Lock()
+	defer sw.stateMu.Unlock()
+	sw.state.state = "processing"
+	sw.state.branch = path
+	if sw.state.op == "" {
+		sw.state.path = path
+	}
+}
+
+func (sw *syncWorker) beginOp(op, path string) {
+	sw.stateMu.Lock()
+	defer sw.stateMu.Unlock()
+	sw.state.state = op
+	sw.state.op = op
+	sw.state.path = path
+	sw.state.started = time.Now()
+	sw.state.lastSlow = time.Time{}
+}
+
+func (sw *syncWorker) endOp() {
+	sw.stateMu.Lock()
+	defer sw.stateMu.Unlock()
+	sw.state.op = ""
+	sw.state.started = time.Time{}
+	sw.state.lastSlow = time.Time{}
+	if sw.state.branch != "" {
+		sw.state.state = "processing"
+		sw.state.path = sw.state.branch
+	} else {
+		sw.state.state = "idle"
+		sw.state.path = ""
+	}
+}
+
+func (sw *syncWorker) snapshotState() WorkerState {
+	sw.stateMu.Lock()
+	state := sw.state
+	sw.stateMu.Unlock()
+
+	ws := WorkerState{
+		ID:        sw.id,
+		State:     state.state,
+		Operation: state.op,
+		Path:      state.path,
+		Since:     state.started,
+		QueueLen:  sw.queueLen(),
+	}
+	if !state.started.IsZero() {
+		ws.Duration = time.Since(state.started)
+	}
+	return ws
+}
+
+func (sw *syncWorker) markSlowLogged(now time.Time) {
+	sw.stateMu.Lock()
+	sw.state.lastSlow = now
+	sw.stateMu.Unlock()
+}
+
+func (sw *syncWorker) shouldLogSlow(now time.Time, threshold, interval time.Duration) (bool, workerStateInternal) {
+	sw.stateMu.Lock()
+	defer sw.stateMu.Unlock()
+	state := sw.state
+	if state.op == "" || state.started.IsZero() {
+		return false, state
+	}
+	if now.Sub(state.started) < threshold {
+		return false, state
+	}
+	if !state.lastSlow.IsZero() && now.Sub(state.lastSlow) < interval {
+		return false, state
+	}
+	return true, state
+}
+
 // NewSynchronizer creates a new Synchronizer for syncing srcRoot to dstRoot.
 // numWorkers specifies the number of parallel workers to use (minimum 1).
 // If numWorkers <= 0, it defaults to 1.
@@ -323,6 +438,10 @@ func NewSynchronizerWithLoggerAndOptions(srcRoot, dstRoot string, numWorkers int
 		logger = &defaultLogger{}
 	}
 
+	if opts.LogSlowOps && opts.SlowOpInterval == 0 {
+		opts.SlowOpInterval = time.Second
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Synchronizer{
@@ -343,6 +462,20 @@ func (s *Synchronizer) signalRootRead() {
 	s.rootReadOnce.Do(func() {
 		close(s.rootReadDone)
 	})
+}
+
+func (s *Synchronizer) startOp(worker *syncWorker, opName, path string) {
+	if worker != nil {
+		worker.beginOp(opName, path)
+	}
+	s.trackOpStart(opName)
+}
+
+func (s *Synchronizer) endOp(worker *syncWorker, opName string) {
+	s.trackOpEnd(opName)
+	if worker != nil {
+		worker.endOp()
+	}
 }
 
 // trackOpStart increments the in-progress counter for an operation
@@ -413,11 +546,56 @@ func (s *Synchronizer) GetInProgressOperations() map[string]uint64 {
 	}
 }
 
+// GetWorkerStates returns the current state of all workers.
+func (s *Synchronizer) GetWorkerStates() []WorkerState {
+	s.workerMu.Lock()
+	workers := append([]*syncWorker(nil), s.workers...)
+	s.workerMu.Unlock()
+
+	states := make([]WorkerState, 0, len(workers))
+	for _, worker := range workers {
+		states = append(states, worker.snapshotState())
+	}
+	return states
+}
+
+func (s *Synchronizer) logSlowOps() {
+	interval := s.options.SlowOpInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	threshold := time.Second
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.monitorCtx.Done():
+			return
+		case now := <-ticker.C:
+			s.workerMu.Lock()
+			workers := append([]*syncWorker(nil), s.workers...)
+			s.workerMu.Unlock()
+			for _, worker := range workers {
+				shouldLog, state := worker.shouldLogSlow(now, threshold, interval)
+				if !shouldLog {
+					continue
+				}
+				duration := now.Sub(state.started)
+				s.logger.Printf("WARN slow op: %s '%s' running %s (waiting for syscall to return)\n", state.op, state.path, duration.Truncate(time.Millisecond))
+				worker.markSlowLogged(now)
+			}
+		}
+	}
+}
+
 // Run starts the synchronization process.
 // It initializes a worker pool and processes the directory tree in parallel.
 // The function blocks until all workers complete.
 // Returns an error if the synchronization fails.
 func (s *Synchronizer) Run() error {
+	defer s.cancel()
 	// Initialize workers
 	s.workerMu.Lock()
 	for i := 0; i < s.numWorkers; i++ {
@@ -428,6 +606,10 @@ func (s *Synchronizer) Run() error {
 		s.workers = append(s.workers, worker)
 	}
 	s.workerMu.Unlock()
+
+	if s.options.LogSlowOps {
+		go s.logSlowOps()
+	}
 
 	// Start with root directory
 	root := &syncBranch{}
@@ -459,15 +641,20 @@ func (s *Synchronizer) Run() error {
 func (s *Synchronizer) startWorker(worker *syncWorker) {
 	defer s.wg.Done()
 
+	worker.setIdle()
+
 	for {
 		branch := worker.queuePop()
 
 		if branch != nil {
+			worker.setBranch(branch.relPath())
 			if err := worker.processBranch(branch); err != nil {
 				s.logger.Printf("ERROR processing '%s': %v\n", branch.relPath(), err)
 			}
 		} else {
+			worker.setSteal()
 			if !s.stealWork(worker) {
+				worker.setIdle()
 				// No work available, exit
 				return
 			}
@@ -511,9 +698,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	dstAbsPath := branch.dstAbsPath(w.synchronizer.dstRoot)
 
 	// ReadDir source (collects stat info for entries internally)
-	w.synchronizer.trackOpStart("readdir")
+	w.synchronizer.startOp(w, "readdir", srcAbsPath)
 	srcEntries, err := os.ReadDir(srcAbsPath)
-	w.synchronizer.trackOpEnd("readdir")
+	w.synchronizer.endOp(w, "readdir")
 	if w.synchronizer.callbacks.OnReadDir != nil {
 		w.synchronizer.callbacks.OnReadDir(srcAbsPath, srcEntries, err)
 	}
@@ -531,9 +718,10 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	entryErr := make(map[string]error)
 	if w.synchronizer.callbacks.OnLstat != nil {
 		for _, entry := range srcEntries {
-			w.synchronizer.trackOpStart("lstat")
+			entryPath := filepath.Join(srcAbsPath, entry.Name())
+			w.synchronizer.startOp(w, "lstat", entryPath)
 			info, infoErr := entry.Info()
-			w.synchronizer.trackOpEnd("lstat")
+			w.synchronizer.endOp(w, "lstat")
 			w.synchronizer.callbacks.OnLstat(filepath.Join(srcAbsPath, entry.Name()), entry.IsDir(), info, infoErr)
 			if infoErr == nil {
 				entryInfo[entry.Name()] = info
@@ -543,7 +731,10 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 		}
 	} else {
 		for _, entry := range srcEntries {
+			entryPath := filepath.Join(srcAbsPath, entry.Name())
+			w.synchronizer.startOp(w, "lstat", entryPath)
 			info, infoErr := entry.Info()
+			w.synchronizer.endOp(w, "lstat")
 			if infoErr == nil {
 				entryInfo[entry.Name()] = info
 			} else {
@@ -559,7 +750,10 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 		if err, ok := entryErr[name]; ok {
 			return nil, err
 		}
-		info, err := os.Lstat(filepath.Join(srcAbsPath, name))
+		entryPath := filepath.Join(srcAbsPath, name)
+		w.synchronizer.startOp(w, "lstat", entryPath)
+		info, err := os.Lstat(entryPath)
+		w.synchronizer.endOp(w, "lstat")
 		if err == nil {
 			entryInfo[name] = info
 		} else {
@@ -569,7 +763,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	}
 
 	// Build map of destination entries
+	w.synchronizer.startOp(w, "readdir", dstAbsPath)
 	dstEntries, _ := os.ReadDir(dstAbsPath)
+	w.synchronizer.endOp(w, "readdir")
 	if branch.isRoot() {
 		w.synchronizer.signalRootRead()
 	}
@@ -598,7 +794,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 		if srcEntry.IsDir() {
 			if dstExists && !dstEntry.IsDir() {
 				// Type mismatch: dst is not a dir, remove it
-				w.synchronizer.removeAll(dstChildPath)
+				w.synchronizer.removeAll(w, dstChildPath)
 			}
 
 			if !dstExists {
@@ -606,19 +802,19 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 				if !w.synchronizer.readOnly {
 					srcInfo, _ := getSrcInfo(srcName)
 					mode := srcInfo.Mode().Perm()
-					w.synchronizer.trackOpStart("mkdir")
+					w.synchronizer.startOp(w, "mkdir", dstChildPath)
 					err := os.Mkdir(dstChildPath, mode)
-					w.synchronizer.trackOpEnd("mkdir")
+					w.synchronizer.endOp(w, "mkdir")
 					if w.synchronizer.callbacks.OnMkdir != nil {
 						w.synchronizer.callbacks.OnMkdir(dstChildPath, mode, err)
 					}
 					// Sync inode attributes
-					w.synchronizer.syncInodeAttrs(srcChildPath, dstChildPath)
+					w.synchronizer.syncInodeAttrs(w, srcChildPath, dstChildPath)
 				}
 			} else {
 				// Directory exists, sync inode attributes
 				if !w.synchronizer.readOnly {
-					w.synchronizer.syncInodeAttrs(srcChildPath, dstChildPath)
+					w.synchronizer.syncInodeAttrs(w, srcChildPath, dstChildPath)
 				}
 			}
 
@@ -638,7 +834,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 				if info, err := dstEntry.Info(); err == nil {
 					fileSize = info.Size()
 				}
-				w.synchronizer.unlinkWithSize(dstChildPath, fileSize)
+				w.synchronizer.unlinkWithSize(w, dstChildPath, fileSize)
 			} else if dstExists {
 				// Check if target matches
 				dstTarget, _ := os.Readlink(dstChildPath)
@@ -647,16 +843,16 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 					if info, err := dstEntry.Info(); err == nil {
 						fileSize = info.Size()
 					}
-					w.synchronizer.unlinkWithSize(dstChildPath, fileSize)
+					w.synchronizer.unlinkWithSize(w, dstChildPath, fileSize)
 					dstExists = false
 				}
 			}
 
 			if !dstExists {
 				if !w.synchronizer.readOnly {
-					w.synchronizer.trackOpStart("symlink")
+					w.synchronizer.startOp(w, "symlink", dstChildPath)
 					err := os.Symlink(linkTarget, dstChildPath)
-					w.synchronizer.trackOpEnd("symlink")
+					w.synchronizer.endOp(w, "symlink")
 					if w.synchronizer.callbacks.OnSymlink != nil {
 						w.synchronizer.callbacks.OnSymlink(dstChildPath, linkTarget, err)
 					}
@@ -670,7 +866,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 				if info, err := dstEntry.Info(); err == nil {
 					dirSize = info.Size()
 				}
-				w.synchronizer.removeAllWithSize(dstChildPath, dirSize)
+				w.synchronizer.removeAllWithSize(w, dstChildPath, dirSize)
 			}
 
 			// Check if we need to copy
@@ -685,18 +881,18 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			if shouldCopy {
 				if !w.synchronizer.readOnly {
 					srcInfo, _ := getSrcInfo(srcName)
-					w.synchronizer.trackOpStart("copy")
+					w.synchronizer.startOp(w, "copy", srcChildPath)
 					err := w.synchronizer.copyFile(srcChildPath, dstChildPath)
-					w.synchronizer.trackOpEnd("copy")
+					w.synchronizer.endOp(w, "copy")
 					if w.synchronizer.callbacks.OnCopy != nil {
 						w.synchronizer.callbacks.OnCopy(srcChildPath, dstChildPath, srcInfo.Size(), err)
 					}
 					// Sync inode attributes after copy
-					w.synchronizer.syncInodeAttrs(srcChildPath, dstChildPath)
+					w.synchronizer.syncInodeAttrs(w, srcChildPath, dstChildPath)
 				}
 			} else if dstExists && !w.synchronizer.readOnly {
 				// File exists but wasn't copied, still sync inode attributes
-				w.synchronizer.syncInodeAttrs(srcChildPath, dstChildPath)
+				w.synchronizer.syncInodeAttrs(w, srcChildPath, dstChildPath)
 			}
 		}
 
@@ -713,14 +909,14 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			if info, err := dstEntry.Info(); err == nil {
 				totalSize = info.Size()
 			}
-			w.synchronizer.removeAllWithSize(dstChildPath, totalSize)
+			w.synchronizer.removeAllWithSize(w, dstChildPath, totalSize)
 		} else {
 			// Get file size before removal
 			var fileSize int64
 			if info, err := dstEntry.Info(); err == nil {
 				fileSize = info.Size()
 			}
-			w.synchronizer.unlinkWithSize(dstChildPath, fileSize)
+			w.synchronizer.unlinkWithSize(w, dstChildPath, fileSize)
 		}
 	}
 
@@ -730,7 +926,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 // syncInodeAttrs synchronizes file inode attributes (permissions, ownership, times).
 // It syncs mode, uid/gid, and modification/access times from source to destination.
 // Errors are non-fatal and logged but do not abort the sync.
-func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
+func (s *Synchronizer) syncInodeAttrs(worker *syncWorker, srcPath, dstPath string) error {
 	if s.readOnly {
 		return nil
 	}
@@ -761,9 +957,9 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 	// Sync permissions (mode)
 	mode := srcInfo.Mode().Perm()
 	if beforeMode != mode {
-		s.trackOpStart("chmod")
+		s.startOp(worker, "chmod", dstPath)
 		if err := os.Chmod(dstPath, mode); err != nil {
-			s.trackOpEnd("chmod")
+			s.endOp(worker, "chmod")
 			// Log but don't fail
 			s.logger.Printf("WARN: failed to chmod %s: %v\n", dstPath, err)
 			if s.callbacks.OnChmod != nil {
@@ -773,7 +969,7 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 				s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, err)
 			}
 		} else {
-			s.trackOpEnd("chmod")
+			s.endOp(worker, "chmod")
 			if s.callbacks.OnChmod != nil {
 				s.callbacks.OnChmod(dstPath, mode, nil)
 			}
@@ -796,9 +992,9 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 			if s.options.IgnoreAtime && !beforeAtime.IsZero() {
 				atimeToSet = beforeAtime
 			}
-			s.trackOpStart("chtimes")
+			s.startOp(worker, "chtimes", dstPath)
 			if err := os.Chtimes(dstPath, atimeToSet, modTime); err != nil {
-				s.trackOpEnd("chtimes")
+				s.endOp(worker, "chtimes")
 				// Log but don't fail
 				s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
 				if s.callbacks.OnChtimes != nil {
@@ -808,7 +1004,7 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 					s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, err)
 				}
 			} else {
-				s.trackOpEnd("chtimes")
+				s.endOp(worker, "chtimes")
 				if s.callbacks.OnChtimes != nil {
 					s.callbacks.OnChtimes(dstPath, nil)
 				}
@@ -826,9 +1022,9 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 		uid := int(stat.Uid)
 		gid := int(stat.Gid)
 		if beforeUID != uid || beforeGID != gid {
-			s.trackOpStart("chown")
+			s.startOp(worker, "chown", dstPath)
 			if err := os.Chown(dstPath, uid, gid); err != nil {
-				s.trackOpEnd("chown")
+				s.endOp(worker, "chown")
 				// Log but don't fail (non-root users typically can't chown)
 				s.logger.Printf("DEBUG: failed to chown %s to %d:%d: %v\n", dstPath, uid, gid, err)
 				if s.callbacks.OnChown != nil {
@@ -838,7 +1034,7 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 					s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, err)
 				}
 			} else {
-				s.trackOpEnd("chown")
+				s.endOp(worker, "chown")
 				if s.callbacks.OnChown != nil {
 					s.callbacks.OnChown(dstPath, uid, gid, nil)
 				}
@@ -960,12 +1156,14 @@ func (s *Synchronizer) copyFile(srcPath, dstPath string) error {
 // unlink removes a file or symlink.
 // In read-only mode, this is a no-op. Otherwise, it removes the file and
 // invokes the OnUnlink callback if present.
-func (s *Synchronizer) unlink(path string) error {
+func (s *Synchronizer) unlink(worker *syncWorker, path string) error {
 	if s.readOnly {
 		return nil
 	}
 
+	s.startOp(worker, "unlink", path)
 	err := os.Remove(path)
+	s.endOp(worker, "unlink")
 	if s.callbacks.OnUnlink != nil {
 		s.callbacks.OnUnlink(path, err)
 	}
@@ -974,14 +1172,14 @@ func (s *Synchronizer) unlink(path string) error {
 
 // unlinkWithSize removes a file or symlink with size information for detailed tracking.
 // Calls both OnUnlink and OnUnlinkDetail callbacks if present.
-func (s *Synchronizer) unlinkWithSize(path string, size int64) error {
+func (s *Synchronizer) unlinkWithSize(worker *syncWorker, path string, size int64) error {
 	if s.readOnly {
 		return nil
 	}
 
-	s.trackOpStart("unlink")
+	s.startOp(worker, "unlink", path)
 	err := os.Remove(path)
-	s.trackOpEnd("unlink")
+	s.endOp(worker, "unlink")
 	if s.callbacks.OnUnlink != nil {
 		s.callbacks.OnUnlink(path, err)
 	}
@@ -994,14 +1192,14 @@ func (s *Synchronizer) unlinkWithSize(path string, size int64) error {
 // removeAll recursively removes a directory tree.
 // In read-only mode, this is a no-op. Otherwise, it removes the directory and
 // invokes the OnRemoveAll callback if present.
-func (s *Synchronizer) removeAll(path string) error {
+func (s *Synchronizer) removeAll(worker *syncWorker, path string) error {
 	if s.readOnly {
 		return nil
 	}
 
-	s.trackOpStart("removeall")
+	s.startOp(worker, "removeall", path)
 	err := os.RemoveAll(path)
-	s.trackOpEnd("removeall")
+	s.endOp(worker, "removeall")
 	if s.callbacks.OnRemoveAll != nil {
 		s.callbacks.OnRemoveAll(path, err)
 	}
@@ -1010,14 +1208,14 @@ func (s *Synchronizer) removeAll(path string) error {
 
 // removeAllWithSize recursively removes a directory tree with size information for detailed tracking.
 // Calls both OnRemoveAll and OnRemoveAllDetail callbacks if present.
-func (s *Synchronizer) removeAllWithSize(path string, size int64) error {
+func (s *Synchronizer) removeAllWithSize(worker *syncWorker, path string, size int64) error {
 	if s.readOnly {
 		return nil
 	}
 
-	s.trackOpStart("removeall")
+	s.startOp(worker, "removeall", path)
 	err := os.RemoveAll(path)
-	s.trackOpEnd("removeall")
+	s.endOp(worker, "removeall")
 	if s.callbacks.OnRemoveAll != nil {
 		s.callbacks.OnRemoveAll(path, err)
 	}

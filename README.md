@@ -52,6 +52,8 @@ csync --verbose --log-op readdir --no-log-op copy /src /dst
 - `--workers <n>` caps the worker pool (default 32).
 - `--ignore-atime` ignores atime differences when syncing times, preserving destination atime when possible.
 - `--show-workers` prints detected CPUs and the configured worker pool size at start.
+- `--stat-workers` prints a worker state table every 10s during sync.
+- `--log-slow-ops` logs operations taking longer than 1s (repeats every second).
 
 ## Usage
 

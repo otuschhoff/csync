@@ -111,6 +111,8 @@ func main() {
 	var noLogOpsFlag []string
 	var ignoreAtime bool
 	var showWorkers bool
+	var statWorkers bool
+	var logSlowOps bool
 
 	rootCmd := &cobra.Command{
 		Use:   "csync <src> <dst>",
@@ -314,19 +316,26 @@ func main() {
 				},
 			}
 
-			opts := csync.Options{IgnoreAtime: ignoreAtime}
+			opts := csync.Options{IgnoreAtime: ignoreAtime, LogSlowOps: logSlowOps}
 			syncer := csync.NewSynchronizerWithLoggerAndOptions(src, dst, workers, false, callbacks, nil, opts)
 			stats.synchronizer = syncer
 
 			var done chan struct{}
-			if statsFlag {
+			if statsFlag || statWorkers {
 				done = make(chan struct{})
+			}
+			if statsFlag {
 				go runStatsPrinter(stats, done, start)
+			}
+			if statWorkers {
+				go runWorkerStatsPrinter(syncer, done)
 			}
 
 			err := syncer.Run()
-			if statsFlag {
+			if done != nil {
 				close(done)
+			}
+			if statsFlag {
 				// Print final stats
 				finalStats := stats.snapshot()
 				printFinalStats(finalStats, start)
@@ -343,6 +352,8 @@ func main() {
 	rootCmd.Flags().StringArrayVar(&noLogOpsFlag, "no-log-op", nil, "exclude operations from verbose output (comma-separated or repeatable)")
 	rootCmd.Flags().BoolVar(&ignoreAtime, "ignore-atime", false, "ignore atime differences when syncing times (preserve existing atime)")
 	rootCmd.Flags().BoolVar(&showWorkers, "show-workers", false, "print detected CPUs and max worker count at start")
+	rootCmd.Flags().BoolVar(&statWorkers, "stat-workers", false, "print worker state table every 10s during sync")
+	rootCmd.Flags().BoolVar(&logSlowOps, "log-slow-ops", false, "log operations taking longer than 1s (repeats every second)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -383,6 +394,59 @@ func runStatsPrinter(stats *statsCollector, done <-chan struct{}, start time.Tim
 			return
 		}
 	}
+}
+
+// runWorkerStatsPrinter prints a worker state table every 10 seconds and on completion.
+func runWorkerStatsPrinter(syncer *csync.Synchronizer, done <-chan struct{}) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			states := syncer.GetWorkerStates()
+			printWorkerStatsTable(states)
+		case <-done:
+			states := syncer.GetWorkerStates()
+			printWorkerStatsTable(states)
+			return
+		}
+	}
+}
+
+// printWorkerStatsTable renders a table with all worker states.
+func printWorkerStatsTable(states []csync.WorkerState) {
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.SetStyle(table.StyleRounded)
+	t.Style().Color.Row = text.Colors{text.Reset}
+	t.SetColumnConfigs([]table.ColumnConfig{
+		{Number: 1, Align: text.AlignRight},
+		{Number: 2, Align: text.AlignLeft},
+		{Number: 3, Align: text.AlignLeft},
+		{Number: 4, Align: text.AlignLeft},
+		{Number: 5, Align: text.AlignLeft},
+		{Number: 6, Align: text.AlignRight},
+	})
+	t.AppendHeader(table.Row{text.Bold.Sprint("Worker"), text.Bold.Sprint("State"), text.Bold.Sprint("Operation"), text.Bold.Sprint("Path"), text.Bold.Sprint("Duration"), text.Bold.Sprint("Queue")})
+
+	for _, st := range states {
+		duration := ""
+		if st.Duration > 0 {
+			duration = st.Duration.Truncate(time.Millisecond).String()
+		}
+		path := st.Path
+		t.AppendRow(table.Row{
+			st.ID,
+			st.State,
+			st.Operation,
+			path,
+			duration,
+			st.QueueLen,
+		})
+	}
+
+	t.Render()
 }
 
 // printStatsTable formats and renders a stats table with operation counts and rates.
