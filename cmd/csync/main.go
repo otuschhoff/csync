@@ -34,6 +34,8 @@ type statsCollector struct {
 	totalBytesScanned atomic.Uint64
 	deletedBytes      atomic.Uint64
 	dirCount          atomic.Uint64
+	// Reference to synchronizer for accessing in-progress operation counts
+	synchronizer *csync.Synchronizer
 }
 
 // statsSnapshot captures a point-in-time view of collected statistics.
@@ -52,11 +54,22 @@ type statsSnapshot struct {
 	totalBytesScanned uint64
 	deletedBytes      uint64
 	dirCount          uint64
+	// Workers concurrency tracking
+	workersLstat     uint64
+	workersReaddir   uint64
+	workersMkdir     uint64
+	workersUnlink    uint64
+	workersRemoveAll uint64
+	workersSymlink   uint64
+	workersChmod     uint64
+	workersChown     uint64
+	workersChtimes   uint64
+	workersCopy      uint64
 }
 
 // snapshot returns a consistent view of current stats at a given moment.
 func (s *statsCollector) snapshot() statsSnapshot {
-	return statsSnapshot{
+	snap := statsSnapshot{
 		lstat:             s.lstat.Load(),
 		readdir:           s.readdir.Load(),
 		mkdir:             s.mkdir.Load(),
@@ -72,6 +85,21 @@ func (s *statsCollector) snapshot() statsSnapshot {
 		deletedBytes:      s.deletedBytes.Load(),
 		dirCount:          s.dirCount.Load(),
 	}
+	// Get in-progress operation counts from synchronizer
+	if s.synchronizer != nil {
+		inProgress := s.synchronizer.GetInProgressOperations()
+		snap.workersLstat = inProgress["lstat"]
+		snap.workersReaddir = inProgress["readdir"]
+		snap.workersMkdir = inProgress["mkdir"]
+		snap.workersUnlink = inProgress["unlink"]
+		snap.workersRemoveAll = inProgress["removeall"]
+		snap.workersSymlink = inProgress["symlink"]
+		snap.workersChmod = inProgress["chmod"]
+		snap.workersChown = inProgress["chown"]
+		snap.workersChtimes = inProgress["chtimes"]
+		snap.workersCopy = inProgress["copy"]
+	}
+	return snap
 }
 
 func main() {
@@ -288,6 +316,7 @@ func main() {
 
 			opts := csync.Options{IgnoreAtime: ignoreAtime}
 			syncer := csync.NewSynchronizerWithLoggerAndOptions(src, dst, workers, false, callbacks, nil, opts)
+			stats.synchronizer = syncer
 
 			var done chan struct{}
 			if statsFlag {
@@ -398,8 +427,9 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		{Number: 3, Align: text.AlignLeft},
 		{Number: 4, Align: text.AlignLeft},
 		{Number: 5, Align: text.AlignLeft},
+		{Number: 6, Align: text.AlignRight},
 	})
-	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("%"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)")})
+	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("%"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)"), text.Bold.Sprint("Workers")})
 
 	lstatTotal := cur.lstat
 	for _, r := range rows {
@@ -470,12 +500,56 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 	intervals = alignDecimal(intervals)
 
 	for i, name := range names {
+		workersStr := ""
+		switch name {
+		case "lstat":
+			if cur.workersLstat > 0 {
+				workersStr = formatScaledUint(cur.workersLstat, "")
+			}
+		case "readdir":
+			if cur.workersReaddir > 0 {
+				workersStr = formatScaledUint(cur.workersReaddir, "")
+			}
+		case "mkdir":
+			if cur.workersMkdir > 0 {
+				workersStr = formatScaledUint(cur.workersMkdir, "")
+			}
+		case "unlink":
+			if cur.workersUnlink > 0 {
+				workersStr = formatScaledUint(cur.workersUnlink, "")
+			}
+		case "removeall":
+			if cur.workersRemoveAll > 0 {
+				workersStr = formatScaledUint(cur.workersRemoveAll, "")
+			}
+		case "symlink":
+			if cur.workersSymlink > 0 {
+				workersStr = formatScaledUint(cur.workersSymlink, "")
+			}
+		case "chmod":
+			if cur.workersChmod > 0 {
+				workersStr = formatScaledUint(cur.workersChmod, "")
+			}
+		case "chown":
+			if cur.workersChown > 0 {
+				workersStr = formatScaledUint(cur.workersChown, "")
+			}
+		case "chtimes":
+			if cur.workersChtimes > 0 {
+				workersStr = formatScaledUint(cur.workersChtimes, "")
+			}
+		case "copy":
+			if cur.workersCopy > 0 {
+				workersStr = formatScaledUint(cur.workersCopy, "")
+			}
+		}
 		t.AppendRow(table.Row{
 			text.Bold.Sprint(name),
 			percents[i],
 			totals[i],
 			avgs[i],
 			intervals[i],
+			workersStr,
 		})
 	}
 

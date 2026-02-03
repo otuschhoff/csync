@@ -42,6 +42,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -204,6 +205,18 @@ type Synchronizer struct {
 
 	rootReadOnce sync.Once
 	rootReadDone chan struct{}
+
+	// In-progress operation tracking for concurrency monitoring
+	inProgressLstat    atomic.Uint64
+	inProgressReaddir  atomic.Uint64
+	inProgressMkdir    atomic.Uint64
+	inProgressUnlink   atomic.Uint64
+	inProgressRemoveAll atomic.Uint64
+	inProgressSymlink  atomic.Uint64
+	inProgressChmod    atomic.Uint64
+	inProgressChown    atomic.Uint64
+	inProgressChtimes  atomic.Uint64
+	inProgressCopy     atomic.Uint64
 }
 
 // syncWorker represents a single worker processing directories.
@@ -332,6 +345,74 @@ func (s *Synchronizer) signalRootRead() {
 	})
 }
 
+// trackOpStart increments the in-progress counter for an operation
+func (s *Synchronizer) trackOpStart(opName string) {
+	switch opName {
+	case "lstat":
+		s.inProgressLstat.Add(1)
+	case "readdir":
+		s.inProgressReaddir.Add(1)
+	case "mkdir":
+		s.inProgressMkdir.Add(1)
+	case "unlink":
+		s.inProgressUnlink.Add(1)
+	case "removeall":
+		s.inProgressRemoveAll.Add(1)
+	case "symlink":
+		s.inProgressSymlink.Add(1)
+	case "chmod":
+		s.inProgressChmod.Add(1)
+	case "chown":
+		s.inProgressChown.Add(1)
+	case "chtimes":
+		s.inProgressChtimes.Add(1)
+	case "copy":
+		s.inProgressCopy.Add(1)
+	}
+}
+
+// trackOpEnd decrements the in-progress counter for an operation
+func (s *Synchronizer) trackOpEnd(opName string) {
+	switch opName {
+	case "lstat":
+		s.inProgressLstat.Add(^uint64(0)) // atomic decrement
+	case "readdir":
+		s.inProgressReaddir.Add(^uint64(0))
+	case "mkdir":
+		s.inProgressMkdir.Add(^uint64(0))
+	case "unlink":
+		s.inProgressUnlink.Add(^uint64(0))
+	case "removeall":
+		s.inProgressRemoveAll.Add(^uint64(0))
+	case "symlink":
+		s.inProgressSymlink.Add(^uint64(0))
+	case "chmod":
+		s.inProgressChmod.Add(^uint64(0))
+	case "chown":
+		s.inProgressChown.Add(^uint64(0))
+	case "chtimes":
+		s.inProgressChtimes.Add(^uint64(0))
+	case "copy":
+		s.inProgressCopy.Add(^uint64(0))
+	}
+}
+
+// GetInProgressOperations returns the current counts of in-progress operations
+func (s *Synchronizer) GetInProgressOperations() map[string]uint64 {
+	return map[string]uint64{
+		"lstat":     s.inProgressLstat.Load(),
+		"readdir":   s.inProgressReaddir.Load(),
+		"mkdir":     s.inProgressMkdir.Load(),
+		"unlink":    s.inProgressUnlink.Load(),
+		"removeall": s.inProgressRemoveAll.Load(),
+		"symlink":   s.inProgressSymlink.Load(),
+		"chmod":     s.inProgressChmod.Load(),
+		"chown":     s.inProgressChown.Load(),
+		"chtimes":   s.inProgressChtimes.Load(),
+		"copy":      s.inProgressCopy.Load(),
+	}
+}
+
 // Run starts the synchronization process.
 // It initializes a worker pool and processes the directory tree in parallel.
 // The function blocks until all workers complete.
@@ -430,7 +511,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	dstAbsPath := branch.dstAbsPath(w.synchronizer.dstRoot)
 
 	// ReadDir source (collects stat info for entries internally)
+	w.synchronizer.trackOpStart("readdir")
 	srcEntries, err := os.ReadDir(srcAbsPath)
+	w.synchronizer.trackOpEnd("readdir")
 	if w.synchronizer.callbacks.OnReadDir != nil {
 		w.synchronizer.callbacks.OnReadDir(srcAbsPath, srcEntries, err)
 	}
@@ -448,7 +531,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	entryErr := make(map[string]error)
 	if w.synchronizer.callbacks.OnLstat != nil {
 		for _, entry := range srcEntries {
+			w.synchronizer.trackOpStart("lstat")
 			info, infoErr := entry.Info()
+			w.synchronizer.trackOpEnd("lstat")
 			w.synchronizer.callbacks.OnLstat(filepath.Join(srcAbsPath, entry.Name()), entry.IsDir(), info, infoErr)
 			if infoErr == nil {
 				entryInfo[entry.Name()] = info
@@ -521,7 +606,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 				if !w.synchronizer.readOnly {
 					srcInfo, _ := getSrcInfo(srcName)
 					mode := srcInfo.Mode().Perm()
+					w.synchronizer.trackOpStart("mkdir")
 					err := os.Mkdir(dstChildPath, mode)
+					w.synchronizer.trackOpEnd("mkdir")
 					if w.synchronizer.callbacks.OnMkdir != nil {
 						w.synchronizer.callbacks.OnMkdir(dstChildPath, mode, err)
 					}
@@ -567,7 +654,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 
 			if !dstExists {
 				if !w.synchronizer.readOnly {
+					w.synchronizer.trackOpStart("symlink")
 					err := os.Symlink(linkTarget, dstChildPath)
+					w.synchronizer.trackOpEnd("symlink")
 					if w.synchronizer.callbacks.OnSymlink != nil {
 						w.synchronizer.callbacks.OnSymlink(dstChildPath, linkTarget, err)
 					}
@@ -596,7 +685,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			if shouldCopy {
 				if !w.synchronizer.readOnly {
 					srcInfo, _ := getSrcInfo(srcName)
+					w.synchronizer.trackOpStart("copy")
 					err := w.synchronizer.copyFile(srcChildPath, dstChildPath)
+					w.synchronizer.trackOpEnd("copy")
 					if w.synchronizer.callbacks.OnCopy != nil {
 						w.synchronizer.callbacks.OnCopy(srcChildPath, dstChildPath, srcInfo.Size(), err)
 					}
@@ -670,7 +761,9 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 	// Sync permissions (mode)
 	mode := srcInfo.Mode().Perm()
 	if beforeMode != mode {
+		s.trackOpStart("chmod")
 		if err := os.Chmod(dstPath, mode); err != nil {
+			s.trackOpEnd("chmod")
 			// Log but don't fail
 			s.logger.Printf("WARN: failed to chmod %s: %v\n", dstPath, err)
 			if s.callbacks.OnChmod != nil {
@@ -680,6 +773,7 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 				s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, err)
 			}
 		} else {
+			s.trackOpEnd("chmod")
 			if s.callbacks.OnChmod != nil {
 				s.callbacks.OnChmod(dstPath, mode, nil)
 			}
@@ -702,7 +796,9 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 			if s.options.IgnoreAtime && !beforeAtime.IsZero() {
 				atimeToSet = beforeAtime
 			}
+			s.trackOpStart("chtimes")
 			if err := os.Chtimes(dstPath, atimeToSet, modTime); err != nil {
+				s.trackOpEnd("chtimes")
 				// Log but don't fail
 				s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
 				if s.callbacks.OnChtimes != nil {
@@ -712,6 +808,7 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 					s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, err)
 				}
 			} else {
+				s.trackOpEnd("chtimes")
 				if s.callbacks.OnChtimes != nil {
 					s.callbacks.OnChtimes(dstPath, nil)
 				}
@@ -729,7 +826,9 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 		uid := int(stat.Uid)
 		gid := int(stat.Gid)
 		if beforeUID != uid || beforeGID != gid {
+			s.trackOpStart("chown")
 			if err := os.Chown(dstPath, uid, gid); err != nil {
+				s.trackOpEnd("chown")
 				// Log but don't fail (non-root users typically can't chown)
 				s.logger.Printf("DEBUG: failed to chown %s to %d:%d: %v\n", dstPath, uid, gid, err)
 				if s.callbacks.OnChown != nil {
@@ -739,6 +838,7 @@ func (s *Synchronizer) syncInodeAttrs(srcPath, dstPath string) error {
 					s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, err)
 				}
 			} else {
+				s.trackOpEnd("chown")
 				if s.callbacks.OnChown != nil {
 					s.callbacks.OnChown(dstPath, uid, gid, nil)
 				}
@@ -879,7 +979,9 @@ func (s *Synchronizer) unlinkWithSize(path string, size int64) error {
 		return nil
 	}
 
+	s.trackOpStart("unlink")
 	err := os.Remove(path)
+	s.trackOpEnd("unlink")
 	if s.callbacks.OnUnlink != nil {
 		s.callbacks.OnUnlink(path, err)
 	}
@@ -897,7 +999,9 @@ func (s *Synchronizer) removeAll(path string) error {
 		return nil
 	}
 
+	s.trackOpStart("removeall")
 	err := os.RemoveAll(path)
+	s.trackOpEnd("removeall")
 	if s.callbacks.OnRemoveAll != nil {
 		s.callbacks.OnRemoveAll(path, err)
 	}
@@ -911,7 +1015,9 @@ func (s *Synchronizer) removeAllWithSize(path string, size int64) error {
 		return nil
 	}
 
+	s.trackOpStart("removeall")
 	err := os.RemoveAll(path)
+	s.trackOpEnd("removeall")
 	if s.callbacks.OnRemoveAll != nil {
 		s.callbacks.OnRemoveAll(path, err)
 	}
