@@ -620,8 +620,9 @@ func omitLeadingZero(s string) string {
 	return s
 }
 
-// stylizeFraction dims the fractional part when the integer part has two or more digits.
-// It keeps alignment intact by only coloring the fractional segment.
+// stylizeFraction dims the decimal point and fractional digits when the integer part
+// has two or more digits, but preserves the scale suffix (k, m, K, M, etc.) in white.
+// It keeps alignment intact by only coloring the relevant segment.
 func stylizeFraction(s string) string {
 	plain := stripANSI(s)
 	dot := strings.IndexByte(plain, '.')
@@ -632,14 +633,25 @@ func stylizeFraction(s string) string {
 	if len(intPart) < 2 {
 		return s
 	}
-	// Find the fractional segment in the original string, preserving ANSI.
-	// We locate the dot in the original by accounting for ANSI sequences.
-	index := indexInStyled(s, dot)
-	if index == -1 || index >= len(s) {
+
+	// Find where fractional digits end and scale suffix begins.
+	// Fractional digits are immediately after the dot; scale suffix follows.
+	fracEnd := dot + 1
+	for fracEnd < len(plain) && plain[fracEnd] >= '0' && plain[fracEnd] <= '9' {
+		fracEnd++
+	}
+
+	// fracEnd is now at the first non-digit character after the decimal point (the scale).
+	// Find the corresponding indices in the styled string.
+	dotIndex := indexInStyled(s, dot)
+	fracEndIndex := indexInStyled(s, fracEnd)
+
+	if dotIndex == -1 || fracEndIndex == -1 || dotIndex >= len(s) || fracEndIndex > len(s) {
 		return s
 	}
-	// Split on the dot in the styled string.
-	return s[:index] + text.FgHiBlack.Sprint(s[index:])
+
+	// Reconstruct: unchanged part + dimmed (dot + fractional digits) + scale suffix
+	return s[:dotIndex] + text.FgHiBlack.Sprint(s[dotIndex:fracEndIndex]) + s[fracEndIndex:]
 }
 
 // indexInStyled maps an index in the plain string to the styled string index.
