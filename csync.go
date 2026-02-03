@@ -157,6 +157,14 @@ type Callbacks struct {
 	// and booleans indicating which times needed an update.
 	OnChtimesDetail func(path string, beforeAtime, beforeMtime, afterAtime, afterMtime time.Time, changedAtime, changedMtime bool, err error)
 
+	// OnUnlinkDetail is called when removing a file or symlink, with the size of the removed file.
+	// Called with the file path, file size in bytes, and any error encountered.
+	OnUnlinkDetail func(path string, size int64, err error)
+
+	// OnRemoveAllDetail is called when recursively removing a path, with the total size removed.
+	// Called with the path being removed, total size in bytes, and any error encountered.
+	OnRemoveAllDetail func(path string, size int64, err error)
+
 	// OnIgnore is called to determine if a file or directory should be ignored during sync.
 	// Called with the entry name (basename), full absolute path, whether it's a directory,
 	// the stat information (from entry.Info or Lstat), and any stat error.
@@ -539,12 +547,20 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 
 			if dstExists && !((dstEntry.Type() & os.ModeSymlink) != 0) {
 				// Type mismatch: dst is not a symlink, remove it
-				w.synchronizer.unlink(dstChildPath)
+				var fileSize int64
+				if info, err := dstEntry.Info(); err == nil {
+					fileSize = info.Size()
+				}
+				w.synchronizer.unlinkWithSize(dstChildPath, fileSize)
 			} else if dstExists {
 				// Check if target matches
 				dstTarget, _ := os.Readlink(dstChildPath)
 				if dstTarget != linkTarget {
-					w.synchronizer.unlink(dstChildPath)
+					var fileSize int64
+					if info, err := dstEntry.Info(); err == nil {
+						fileSize = info.Size()
+					}
+					w.synchronizer.unlinkWithSize(dstChildPath, fileSize)
 					dstExists = false
 				}
 			}
@@ -561,7 +577,11 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			// Regular file
 			if dstExists && dstEntry.IsDir() {
 				// Type mismatch: dst is a dir, remove it
-				w.synchronizer.removeAll(dstChildPath)
+				var dirSize int64
+				if info, err := dstEntry.Info(); err == nil {
+					dirSize = info.Size()
+				}
+				w.synchronizer.removeAllWithSize(dstChildPath, dirSize)
 			}
 
 			// Check if we need to copy
@@ -597,9 +617,19 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	for dstName, dstEntry := range dstMap {
 		dstChildPath := filepath.Join(dstAbsPath, dstName)
 		if dstEntry.IsDir() {
-			w.synchronizer.removeAll(dstChildPath)
+			// Calculate total size of directory tree before removal
+			var totalSize int64
+			if info, err := dstEntry.Info(); err == nil {
+				totalSize = info.Size()
+			}
+			w.synchronizer.removeAllWithSize(dstChildPath, totalSize)
 		} else {
-			w.synchronizer.unlink(dstChildPath)
+			// Get file size before removal
+			var fileSize int64
+			if info, err := dstEntry.Info(); err == nil {
+				fileSize = info.Size()
+			}
+			w.synchronizer.unlinkWithSize(dstChildPath, fileSize)
 		}
 	}
 
@@ -842,6 +872,23 @@ func (s *Synchronizer) unlink(path string) error {
 	return err
 }
 
+// unlinkWithSize removes a file or symlink with size information for detailed tracking.
+// Calls both OnUnlink and OnUnlinkDetail callbacks if present.
+func (s *Synchronizer) unlinkWithSize(path string, size int64) error {
+	if s.readOnly {
+		return nil
+	}
+
+	err := os.Remove(path)
+	if s.callbacks.OnUnlink != nil {
+		s.callbacks.OnUnlink(path, err)
+	}
+	if s.callbacks.OnUnlinkDetail != nil {
+		s.callbacks.OnUnlinkDetail(path, size, err)
+	}
+	return err
+}
+
 // removeAll recursively removes a directory tree.
 // In read-only mode, this is a no-op. Otherwise, it removes the directory and
 // invokes the OnRemoveAll callback if present.
@@ -853,6 +900,23 @@ func (s *Synchronizer) removeAll(path string) error {
 	err := os.RemoveAll(path)
 	if s.callbacks.OnRemoveAll != nil {
 		s.callbacks.OnRemoveAll(path, err)
+	}
+	return err
+}
+
+// removeAllWithSize recursively removes a directory tree with size information for detailed tracking.
+// Calls both OnRemoveAll and OnRemoveAllDetail callbacks if present.
+func (s *Synchronizer) removeAllWithSize(path string, size int64) error {
+	if s.readOnly {
+		return nil
+	}
+
+	err := os.RemoveAll(path)
+	if s.callbacks.OnRemoveAll != nil {
+		s.callbacks.OnRemoveAll(path, err)
+	}
+	if s.callbacks.OnRemoveAllDetail != nil {
+		s.callbacks.OnRemoveAllDetail(path, size, err)
 	}
 	return err
 }

@@ -32,6 +32,7 @@ type statsCollector struct {
 	copies            atomic.Uint64
 	bytes             atomic.Uint64
 	totalBytesScanned atomic.Uint64
+	deletedBytes      atomic.Uint64
 	dirCount          atomic.Uint64
 }
 
@@ -49,6 +50,7 @@ type statsSnapshot struct {
 	copies            uint64
 	bytes             uint64
 	totalBytesScanned uint64
+	deletedBytes      uint64
 	dirCount          uint64
 }
 
@@ -67,6 +69,7 @@ func (s *statsCollector) snapshot() statsSnapshot {
 		copies:            s.copies.Load(),
 		bytes:             s.bytes.Load(),
 		totalBytesScanned: s.totalBytesScanned.Load(),
+		deletedBytes:      s.deletedBytes.Load(),
 		dirCount:          s.dirCount.Load(),
 	}
 }
@@ -202,12 +205,22 @@ func main() {
 						logMsg("unlink", path, err)
 					}
 				},
+				OnUnlinkDetail: func(path string, size int64, err error) {
+					if err == nil && size > 0 {
+						stats.deletedBytes.Add(uint64(size))
+					}
+				},
 				OnRemoveAll: func(path string, err error) {
 					if err == nil {
 						stats.removeAll.Add(1)
 					}
 					if shouldLog("removeall") {
 						logMsg("removeall", path, err)
+					}
+				},
+				OnRemoveAllDetail: func(path string, size int64, err error) {
+					if err == nil && size > 0 {
+						stats.deletedBytes.Add(uint64(size))
 					}
 				},
 				OnSymlink: func(linkPath, target string, err error) {
@@ -767,10 +780,12 @@ func formatBytesRate(rate float64) string {
 // printFinalStats displays comprehensive final statistics after sync completion.
 func printFinalStats(stats statsSnapshot, start time.Time) {
 	elapsed := time.Since(start)
+	// Remove sub-second precision from duration
+	elapsedTrunc := elapsed.Truncate(time.Second)
 
 	fmt.Println()
 	fmt.Println("Final Statistics:")
-	fmt.Printf("  Duration:           %v\n", elapsed)
+	fmt.Printf("  Total Duration:     %v\n", elapsedTrunc)
 	inodeCount := formatScaledUint(stats.lstat, "")
 	if inodeCount == "" {
 		inodeCount = "0"
@@ -787,11 +802,27 @@ func printFinalStats(stats statsSnapshot, start time.Time) {
 	if copySize == "" {
 		copySize = "0"
 	}
+	deletedSize := formatScaledBytesUint(stats.deletedBytes)
+	if deletedSize == "" {
+		deletedSize = "0"
+	}
+	netSize := int64(stats.bytes) - int64(stats.deletedBytes)
+	var netStr string
+	if netSize >= 0 {
+		netStr = formatScaledBytesUint(uint64(netSize))
+	} else {
+		netStr = fmt.Sprintf("-%s", formatScaledBytesUint(uint64(-netSize)))
+	}
+	if netStr == "" {
+		netStr = "0"
+	}
 
 	fmt.Printf("  Inode count:        %s\n", inodeCount)
 	fmt.Printf("  Directory count:    %s\n", dirCount)
 	fmt.Printf("  Total data size:    %s\n", totalSize)
 	fmt.Printf("  Copied data size:   %s\n", copySize)
+	fmt.Printf("  Deleted data size:  %s\n", deletedSize)
+	fmt.Printf("  Net total:          %s\n", netStr)
 
 	if elapsed.Seconds() > 0 {
 		copySpeed := float64(stats.bytes) / elapsed.Seconds()
