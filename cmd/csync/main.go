@@ -574,7 +574,7 @@ func formatScaledBytesFloat(v float64, suffix string) string {
 	return fmt.Sprintf("%.1f%s%s", v, units[idx], suffix)
 }
 
-// formatPercent renders a percentage with %.1f%%, applying "<" for tiny values,
+// formatPercent renders a percentage value (without %) applying "<" for tiny values,
 // omitting leading zero for values < 1, and dimming the fractional part when
 // the integer part has two or more digits.
 func formatPercent(value float64) string {
@@ -584,11 +584,11 @@ func formatPercent(value float64) string {
 	if value < 0.05 {
 		return text.FgHiBlack.Sprint("<")
 	}
-	formatted := fmt.Sprintf("%.1f%%", value)
+	formatted := fmt.Sprintf("%.1f", value)
 	return stylizeFraction(omitLeadingZero(formatted))
 }
 
-// formatAvgRate renders a scaled rate with "/s" suffix and the same styling rules as percentages.
+// formatAvgRate renders a scaled rate (without suffix) and the same styling rules as percentages.
 func formatAvgRate(value float64, suffix string) string {
 	if value <= 0 {
 		return ""
@@ -596,11 +596,11 @@ func formatAvgRate(value float64, suffix string) string {
 	if value < 0.05 {
 		return text.FgHiBlack.Sprint("<")
 	}
-	formatted := formatScaledFloat(value, suffix)
+	formatted := formatScaledFloat(value, "")
 	return stylizeFraction(omitLeadingZero(formatted))
 }
 
-// formatAvgBytesRate renders a scaled byte rate with "/s" suffix and the same styling rules.
+// formatAvgBytesRate renders a scaled byte rate (without suffix) and the same styling rules.
 func formatAvgBytesRate(value float64, suffix string) string {
 	if value <= 0 {
 		return ""
@@ -608,7 +608,7 @@ func formatAvgBytesRate(value float64, suffix string) string {
 	if value < 0.05 {
 		return text.FgHiBlack.Sprint("<")
 	}
-	formatted := formatScaledBytesFloat(value, suffix)
+	formatted := formatScaledBytesFloat(value, "")
 	return stylizeFraction(omitLeadingZero(formatted))
 }
 
