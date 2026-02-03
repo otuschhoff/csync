@@ -431,10 +431,7 @@ func printWorkerStatsTable(states []csync.WorkerState) {
 	t.AppendHeader(table.Row{text.Bold.Sprint("Worker"), text.Bold.Sprint("State"), text.Bold.Sprint("Operation"), text.Bold.Sprint("Path"), text.Bold.Sprint("Duration"), text.Bold.Sprint("Queue")})
 
 	for _, st := range states {
-		duration := ""
-		if st.Duration > 0 {
-			duration = st.Duration.Truncate(time.Millisecond).String()
-		}
+		duration := fmt.Sprintf("%dms", st.Duration.Milliseconds())
 		path := st.Path
 		t.AppendRow(table.Row{
 			st.ID,

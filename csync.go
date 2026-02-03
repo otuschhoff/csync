@@ -375,10 +375,19 @@ func (sw *syncWorker) snapshotState() WorkerState {
 	state := sw.state
 	sw.stateMu.Unlock()
 
+	op := state.op
+	if op == "" {
+		if state.state == "processing" && state.branch != "" {
+			op = "branch"
+		} else {
+			op = state.state
+		}
+	}
+
 	ws := WorkerState{
 		ID:        sw.id,
 		State:     state.state,
-		Operation: state.op,
+		Operation: op,
 		Path:      state.path,
 		Since:     state.started,
 		QueueLen:  sw.queueLen(),
