@@ -75,6 +75,7 @@ type statsSnapshot struct {
 	workersChtimesDst   uint64
 	workersCopySrc      uint64
 	workersCopyDst      uint64
+	totalDstWorkers     uint64 // Total count of workers currently on destination operations
 }
 
 // snapshot returns a consistent view of current stats at a given moment.
@@ -169,6 +170,14 @@ func (s *statsCollector) snapshot() statsSnapshot {
 				}
 				if st.SideDst {
 					snap.workersCopyDst++
+				// Count this worker if it's on a destination operation
+				if st.SideDst {
+					snap.totalDstWorkers++
+				}
+								// Count this worker if it's on a destination operation
+								if st.SideDst {
+									snap.totalDstWorkers++
+								}
 				}
 			}
 		}
@@ -547,6 +556,17 @@ func printWorkerStatsTable(states []csync.WorkerState) {
 	}
 
 	t.Render()
+
+	// Count and display total destination workers
+	var dstWorkerCount int
+	for _, st := range states {
+		if st.SideDst {
+			dstWorkerCount++
+		}
+	}
+	if dstWorkerCount > 0 {
+		fmt.Printf("  Destination Workers: %d\n", dstWorkerCount)
+	}
 }
 
 // printStatsTable formats and renders a stats table with operation counts and rates.
