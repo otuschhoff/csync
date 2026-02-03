@@ -212,16 +212,16 @@ type Synchronizer struct {
 	rootReadDone chan struct{}
 
 	// In-progress operation tracking for concurrency monitoring
-	inProgressLstat    atomic.Uint64
-	inProgressReaddir  atomic.Uint64
-	inProgressMkdir    atomic.Uint64
-	inProgressUnlink   atomic.Uint64
+	inProgressLstat     atomic.Uint64
+	inProgressReaddir   atomic.Uint64
+	inProgressMkdir     atomic.Uint64
+	inProgressUnlink    atomic.Uint64
 	inProgressRemoveAll atomic.Uint64
-	inProgressSymlink  atomic.Uint64
-	inProgressChmod    atomic.Uint64
-	inProgressChown    atomic.Uint64
-	inProgressChtimes  atomic.Uint64
-	inProgressCopy     atomic.Uint64
+	inProgressSymlink   atomic.Uint64
+	inProgressChmod     atomic.Uint64
+	inProgressChown     atomic.Uint64
+	inProgressChtimes   atomic.Uint64
+	inProgressCopy      atomic.Uint64
 }
 
 // syncWorker represents a single worker processing directories.
