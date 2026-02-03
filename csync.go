@@ -243,6 +243,8 @@ type workerStateInternal struct {
 	branch   string
 	started  time.Time
 	lastSlow time.Time
+	SideSrc  bool
+	SideDst  bool
 }
 
 // WorkerState exposes the current state of a worker for monitoring.
@@ -254,6 +256,8 @@ type WorkerState struct {
 	Since     time.Time
 	Duration  time.Duration
 	QueueLen  int
+	SideSrc   bool
+	SideDst   bool
 }
 
 // syncBranch represents a directory node in the sync tree.
@@ -345,7 +349,7 @@ func (sw *syncWorker) setBranch(path string) {
 	}
 }
 
-func (sw *syncWorker) beginOp(op, path string) {
+func (sw *syncWorker) beginOp(op, path string, sideSrc, sideDst bool) {
 	sw.stateMu.Lock()
 	defer sw.stateMu.Unlock()
 	sw.state.state = op
@@ -353,6 +357,8 @@ func (sw *syncWorker) beginOp(op, path string) {
 	sw.state.path = path
 	sw.state.started = time.Now()
 	sw.state.lastSlow = time.Time{}
+	sw.state.SideSrc = sideSrc
+	sw.state.SideDst = sideDst
 }
 
 func (sw *syncWorker) endOp() {
@@ -391,6 +397,8 @@ func (sw *syncWorker) snapshotState() WorkerState {
 		Path:      state.path,
 		Since:     state.started,
 		QueueLen:  sw.queueLen(),
+		SideSrc:   state.SideSrc,
+		SideDst:   state.SideDst,
 	}
 	if !state.started.IsZero() {
 		ws.Duration = time.Since(state.started)
@@ -475,9 +483,19 @@ func (s *Synchronizer) signalRootRead() {
 
 func (s *Synchronizer) startOp(worker *syncWorker, opName, path string) {
 	if worker != nil {
-		worker.beginOp(opName, path)
+		sideSrc, sideDst := s.opSide(path)
+		worker.beginOp(opName, path, sideSrc, sideDst)
 	}
 	s.trackOpStart(opName)
+}
+
+func (s *Synchronizer) startCopyOp(worker *syncWorker, srcPath, dstPath string) {
+	if worker != nil {
+		sideSrc := s.isUnderRoot(srcPath, s.srcRoot)
+		sideDst := s.isUnderRoot(dstPath, s.dstRoot)
+		worker.beginOp("copy", srcPath, sideSrc, sideDst)
+	}
+	s.trackOpStart("copy")
 }
 
 func (s *Synchronizer) endOp(worker *syncWorker, opName string) {
@@ -485,6 +503,18 @@ func (s *Synchronizer) endOp(worker *syncWorker, opName string) {
 	if worker != nil {
 		worker.endOp()
 	}
+}
+
+func (s *Synchronizer) isUnderRoot(path, root string) bool {
+	if path == root {
+		return true
+	}
+	rootWithSep := root + string(os.PathSeparator)
+	return strings.HasPrefix(path, rootWithSep)
+}
+
+func (s *Synchronizer) opSide(path string) (bool, bool) {
+	return s.isUnderRoot(path, s.srcRoot), s.isUnderRoot(path, s.dstRoot)
 }
 
 // trackOpStart increments the in-progress counter for an operation
@@ -882,7 +912,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			shouldCopy := !dstExists
 			if !shouldCopy {
 				srcInfo, _ := getSrcInfo(srcName)
+				w.synchronizer.startOp(w, "lstat", dstChildPath)
 				dstInfo, _ := os.Lstat(dstChildPath)
+				w.synchronizer.endOp(w, "lstat")
 				// Copy if size or modtime differs
 				shouldCopy = srcInfo.Size() != dstInfo.Size() || srcInfo.ModTime() != dstInfo.ModTime()
 			}
@@ -890,7 +922,7 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 			if shouldCopy {
 				if !w.synchronizer.readOnly {
 					srcInfo, _ := getSrcInfo(srcName)
-					w.synchronizer.startOp(w, "copy", srcChildPath)
+					w.synchronizer.startCopyOp(w, srcChildPath, dstChildPath)
 					err := w.synchronizer.copyFile(srcChildPath, dstChildPath)
 					w.synchronizer.endOp(w, "copy")
 					if w.synchronizer.callbacks.OnCopy != nil {

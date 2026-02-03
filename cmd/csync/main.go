@@ -55,16 +55,26 @@ type statsSnapshot struct {
 	deletedBytes      uint64
 	dirCount          uint64
 	// Workers concurrency tracking
-	workersLstat     uint64
-	workersReaddir   uint64
-	workersMkdir     uint64
-	workersUnlink    uint64
-	workersRemoveAll uint64
-	workersSymlink   uint64
-	workersChmod     uint64
-	workersChown     uint64
-	workersChtimes   uint64
-	workersCopy      uint64
+	workersLstatSrc     uint64
+	workersLstatDst     uint64
+	workersReaddirSrc   uint64
+	workersReaddirDst   uint64
+	workersMkdirSrc     uint64
+	workersMkdirDst     uint64
+	workersUnlinkSrc    uint64
+	workersUnlinkDst    uint64
+	workersRemoveAllSrc uint64
+	workersRemoveAllDst uint64
+	workersSymlinkSrc   uint64
+	workersSymlinkDst   uint64
+	workersChmodSrc     uint64
+	workersChmodDst     uint64
+	workersChownSrc     uint64
+	workersChownDst     uint64
+	workersChtimesSrc   uint64
+	workersChtimesDst   uint64
+	workersCopySrc      uint64
+	workersCopyDst      uint64
 }
 
 // snapshot returns a consistent view of current stats at a given moment.
@@ -85,19 +95,83 @@ func (s *statsCollector) snapshot() statsSnapshot {
 		deletedBytes:      s.deletedBytes.Load(),
 		dirCount:          s.dirCount.Load(),
 	}
-	// Get in-progress operation counts from synchronizer
+	// Get per-op source/destination counts from worker states
 	if s.synchronizer != nil {
-		inProgress := s.synchronizer.GetInProgressOperations()
-		snap.workersLstat = inProgress["lstat"]
-		snap.workersReaddir = inProgress["readdir"]
-		snap.workersMkdir = inProgress["mkdir"]
-		snap.workersUnlink = inProgress["unlink"]
-		snap.workersRemoveAll = inProgress["removeall"]
-		snap.workersSymlink = inProgress["symlink"]
-		snap.workersChmod = inProgress["chmod"]
-		snap.workersChown = inProgress["chown"]
-		snap.workersChtimes = inProgress["chtimes"]
-		snap.workersCopy = inProgress["copy"]
+		states := s.synchronizer.GetWorkerStates()
+		for _, st := range states {
+			switch st.Operation {
+			case "lstat":
+				if st.SideSrc {
+					snap.workersLstatSrc++
+				}
+				if st.SideDst {
+					snap.workersLstatDst++
+				}
+			case "readdir":
+				if st.SideSrc {
+					snap.workersReaddirSrc++
+				}
+				if st.SideDst {
+					snap.workersReaddirDst++
+				}
+			case "mkdir":
+				if st.SideSrc {
+					snap.workersMkdirSrc++
+				}
+				if st.SideDst {
+					snap.workersMkdirDst++
+				}
+			case "unlink":
+				if st.SideSrc {
+					snap.workersUnlinkSrc++
+				}
+				if st.SideDst {
+					snap.workersUnlinkDst++
+				}
+			case "removeall":
+				if st.SideSrc {
+					snap.workersRemoveAllSrc++
+				}
+				if st.SideDst {
+					snap.workersRemoveAllDst++
+				}
+			case "symlink":
+				if st.SideSrc {
+					snap.workersSymlinkSrc++
+				}
+				if st.SideDst {
+					snap.workersSymlinkDst++
+				}
+			case "chmod":
+				if st.SideSrc {
+					snap.workersChmodSrc++
+				}
+				if st.SideDst {
+					snap.workersChmodDst++
+				}
+			case "chown":
+				if st.SideSrc {
+					snap.workersChownSrc++
+				}
+				if st.SideDst {
+					snap.workersChownDst++
+				}
+			case "chtimes":
+				if st.SideSrc {
+					snap.workersChtimesSrc++
+				}
+				if st.SideDst {
+					snap.workersChtimesDst++
+				}
+			case "copy":
+				if st.SideSrc {
+					snap.workersCopySrc++
+				}
+				if st.SideDst {
+					snap.workersCopyDst++
+				}
+			}
+		}
 	}
 	return snap
 }
@@ -426,20 +500,39 @@ func printWorkerStatsTable(states []csync.WorkerState) {
 		{Number: 3, Align: text.AlignLeft},
 		{Number: 4, Align: text.AlignLeft},
 		{Number: 5, Align: text.AlignLeft},
-		{Number: 6, Align: text.AlignRight},
+		{Number: 6, Align: text.AlignLeft},
+		{Number: 7, Align: text.AlignRight},
+		{Number: 8, Align: text.AlignRight},
 	})
-	t.AppendHeader(table.Row{text.Bold.Sprint("Worker"), text.Bold.Sprint("State"), text.Bold.Sprint("Operation"), text.Bold.Sprint("Path"), text.Bold.Sprint("Duration"), text.Bold.Sprint("Queue")})
+	t.AppendHeader(table.Row{text.Bold.Sprint("Worker"), text.Bold.Sprint("State"), text.Bold.Sprint("Operation"), text.Bold.Sprint("S"), text.Bold.Sprint("D"), text.Bold.Sprint("Path"), text.Bold.Sprint("Duration"), text.Bold.Sprint("Queue")})
 
 	for _, st := range states {
 		duration := fmt.Sprintf("%dms", st.Duration.Milliseconds())
+		sideSrc := ""
+		sideDst := ""
+		if st.SideSrc {
+			sideSrc = "x"
+		}
+		if st.SideDst {
+			sideDst = "x"
+		}
 		path := st.Path
+		if st.Duration < time.Millisecond {
+			duration = ""
+		}
+		queueStr := fmt.Sprintf("%d", st.QueueLen)
+		if st.QueueLen == 0 {
+			queueStr = text.Bold.Sprint(text.FgRed.Sprint("empty"))
+		}
 		t.AppendRow(table.Row{
 			st.ID,
 			st.State,
 			st.Operation,
+			sideSrc,
+			sideDst,
 			path,
 			duration,
-			st.QueueLen,
+			queueStr,
 		})
 	}
 
@@ -489,8 +582,9 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 		{Number: 4, Align: text.AlignLeft},
 		{Number: 5, Align: text.AlignLeft},
 		{Number: 6, Align: text.AlignRight},
+		{Number: 7, Align: text.AlignRight},
 	})
-	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("%"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)"), text.Bold.Sprint("Workers")})
+	t.AppendHeader(table.Row{text.Bold.Sprint("Operation"), text.Bold.Sprint("%"), text.Bold.Sprint("Total"), text.Bold.Sprint("Avg/s"), text.Bold.Sprint("Avg/s (interval)"), text.Bold.Sprint("Workers (Src)"), text.Bold.Sprint("(Dst)")})
 
 	lstatTotal := cur.lstat
 	for _, r := range rows {
@@ -562,46 +656,77 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 
 	for i, name := range names {
 		workersStr := ""
+		dstWorkersStr := ""
 		switch name {
 		case "lstat":
-			if cur.workersLstat > 0 {
-				workersStr = formatScaledUint(cur.workersLstat, "")
+			if cur.workersLstatSrc > 0 {
+				workersStr = formatScaledUint(cur.workersLstatSrc, "")
+			}
+			if cur.workersLstatDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersLstatDst, "")
 			}
 		case "readdir":
-			if cur.workersReaddir > 0 {
-				workersStr = formatScaledUint(cur.workersReaddir, "")
+			if cur.workersReaddirSrc > 0 {
+				workersStr = formatScaledUint(cur.workersReaddirSrc, "")
+			}
+			if cur.workersReaddirDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersReaddirDst, "")
 			}
 		case "mkdir":
-			if cur.workersMkdir > 0 {
-				workersStr = formatScaledUint(cur.workersMkdir, "")
+			if cur.workersMkdirSrc > 0 {
+				workersStr = formatScaledUint(cur.workersMkdirSrc, "")
+			}
+			if cur.workersMkdirDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersMkdirDst, "")
 			}
 		case "unlink":
-			if cur.workersUnlink > 0 {
-				workersStr = formatScaledUint(cur.workersUnlink, "")
+			if cur.workersUnlinkSrc > 0 {
+				workersStr = formatScaledUint(cur.workersUnlinkSrc, "")
+			}
+			if cur.workersUnlinkDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersUnlinkDst, "")
 			}
 		case "removeall":
-			if cur.workersRemoveAll > 0 {
-				workersStr = formatScaledUint(cur.workersRemoveAll, "")
+			if cur.workersRemoveAllSrc > 0 {
+				workersStr = formatScaledUint(cur.workersRemoveAllSrc, "")
+			}
+			if cur.workersRemoveAllDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersRemoveAllDst, "")
 			}
 		case "symlink":
-			if cur.workersSymlink > 0 {
-				workersStr = formatScaledUint(cur.workersSymlink, "")
+			if cur.workersSymlinkSrc > 0 {
+				workersStr = formatScaledUint(cur.workersSymlinkSrc, "")
+			}
+			if cur.workersSymlinkDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersSymlinkDst, "")
 			}
 		case "chmod":
-			if cur.workersChmod > 0 {
-				workersStr = formatScaledUint(cur.workersChmod, "")
+			if cur.workersChmodSrc > 0 {
+				workersStr = formatScaledUint(cur.workersChmodSrc, "")
+			}
+			if cur.workersChmodDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersChmodDst, "")
 			}
 		case "chown":
-			if cur.workersChown > 0 {
-				workersStr = formatScaledUint(cur.workersChown, "")
+			if cur.workersChownSrc > 0 {
+				workersStr = formatScaledUint(cur.workersChownSrc, "")
+			}
+			if cur.workersChownDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersChownDst, "")
 			}
 		case "chtimes":
-			if cur.workersChtimes > 0 {
-				workersStr = formatScaledUint(cur.workersChtimes, "")
+			if cur.workersChtimesSrc > 0 {
+				workersStr = formatScaledUint(cur.workersChtimesSrc, "")
+			}
+			if cur.workersChtimesDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersChtimesDst, "")
 			}
 		case "copy":
-			if cur.workersCopy > 0 {
-				workersStr = formatScaledUint(cur.workersCopy, "")
+			if cur.workersCopySrc > 0 {
+				workersStr = formatScaledUint(cur.workersCopySrc, "")
+			}
+			if cur.workersCopyDst > 0 {
+				dstWorkersStr = formatScaledUint(cur.workersCopyDst, "")
 			}
 		}
 		t.AppendRow(table.Row{
@@ -611,6 +736,7 @@ func printStatsTable(cur, prev statsSnapshot, start, prevTime time.Time) {
 			avgs[i],
 			intervals[i],
 			workersStr,
+			dstWorkersStr,
 		})
 	}
 
