@@ -995,15 +995,15 @@ func TestSyncDetailCallbacks(t *testing.T) {
 	)
 
 	callbacks := Callbacks{
-		OnChmodDetail: func(path string, before, after os.FileMode, err error) {
+		OnDstChmodDetail: func(path string, before, after os.FileMode, err error) {
 			chmodCalled = true
 			beforeMode = before
 			afterMode = after
 		},
-		OnChownDetail: func(path string, oUID, oGID, nUID, nGID int, err error) {
+		OnDstChownDetail: func(path string, oUID, oGID, nUID, nGID int, err error) {
 			chownCalled = true
 		},
-		OnChtimesDetail: func(path string, bAt, bMt, aAt, aMt time.Time, cAt, cMt bool, err error) {
+		OnDstChtimesDetail: func(path string, bAt, bMt, aAt, aMt time.Time, cAt, cMt bool, err error) {
 			chtimesCalled = true
 			beforeAt, beforeMt, afterAt, afterMt = bAt, bMt, aAt, aMt
 			changedA, changedM = cAt, cMt
@@ -1086,7 +1086,7 @@ func TestSyncInodeAttrsIgnoreAtime(t *testing.T) {
 	)
 
 	callbacks := Callbacks{
-		OnChtimesDetail: func(path string, bAt, bMt, aAt, aMt time.Time, cAt, cMt bool, err error) {
+		OnDstChtimesDetail: func(path string, bAt, bMt, aAt, aMt time.Time, cAt, cMt bool, err error) {
 			chtimesCalled = true
 			beforeAt = bAt
 			afterAt = aAt

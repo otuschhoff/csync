@@ -260,7 +260,7 @@ func main() {
 					}
 					return false
 				},
-				OnLstat: func(path string, isDir bool, fileInfo os.FileInfo, err error) {
+				OnSrcLstat: func(path string, isDir bool, fileInfo os.FileInfo, err error) {
 					if err == nil {
 						stats.lstat.Add(1)
 						if isDir {
@@ -273,10 +273,20 @@ func main() {
 						logMsg("lstat", path, err)
 					}
 				},
-				OnReadDir: func(path string, entries []os.DirEntry, err error) {
+				OnDstLstat: func(path string, isDir bool, fileInfo os.FileInfo, err error) {
+					if shouldLog("lstat") {
+						logMsg("lstat", path, err)
+					}
+				},
+				OnSrcReadDir: func(path string, entries []os.DirEntry, err error) {
 					if err == nil {
 						stats.readdir.Add(1)
 					}
+					if shouldLog("readdir") {
+						logMsg("readdir", fmt.Sprintf("%s (%d entries)", path, len(entries)), err)
+					}
+				},
+				OnDstReadDir: func(path string, entries []os.DirEntry, err error) {
 					if shouldLog("readdir") {
 						logMsg("readdir", fmt.Sprintf("%s (%d entries)", path, len(entries)), err)
 					}
@@ -293,7 +303,7 @@ func main() {
 						logMsg("copy", fmt.Sprintf("%s (%s)", relPath, formatBytes(uint64(size))), err)
 					}
 				},
-				OnMkdir: func(path string, mode os.FileMode, err error) {
+				OnDstMkdir: func(path string, mode os.FileMode, err error) {
 					if err == nil {
 						stats.mkdir.Add(1)
 					}
@@ -301,7 +311,7 @@ func main() {
 						logMsg("mkdir", fmt.Sprintf("%s (%s)", path, mode.String()), err)
 					}
 				},
-				OnUnlink: func(path string, err error) {
+				OnDstUnlink: func(path string, err error) {
 					if err == nil {
 						stats.unlink.Add(1)
 					}
@@ -309,12 +319,12 @@ func main() {
 						logMsg("unlink", path, err)
 					}
 				},
-				OnUnlinkDetail: func(path string, size int64, err error) {
+				OnDstUnlinkDetail: func(path string, size int64, err error) {
 					if err == nil && size > 0 {
 						stats.deletedBytes.Add(uint64(size))
 					}
 				},
-				OnRemoveAll: func(path string, err error) {
+				OnDstRemoveAll: func(path string, err error) {
 					if err == nil {
 						stats.removeAll.Add(1)
 					}
@@ -322,12 +332,12 @@ func main() {
 						logMsg("removeall", path, err)
 					}
 				},
-				OnRemoveAllDetail: func(path string, size int64, err error) {
+				OnDstRemoveAllDetail: func(path string, size int64, err error) {
 					if err == nil && size > 0 {
 						stats.deletedBytes.Add(uint64(size))
 					}
 				},
-				OnSymlink: func(linkPath, target string, err error) {
+				OnDstSymlink: func(linkPath, target string, err error) {
 					if err == nil {
 						stats.symlink.Add(1)
 					}
@@ -335,7 +345,7 @@ func main() {
 						logMsg("symlink", fmt.Sprintf("%s -> %s", linkPath, target), err)
 					}
 				},
-				OnChmod: func(path string, mode os.FileMode, err error) {
+				OnDstChmod: func(path string, mode os.FileMode, err error) {
 					if err == nil {
 						stats.chmod.Add(1)
 					}
@@ -343,7 +353,7 @@ func main() {
 						logMsg("chmod", fmt.Sprintf("%s -> %s", path, mode.String()), err)
 					}
 				},
-				OnChown: func(path string, uid, gid int, err error) {
+				OnDstChown: func(path string, uid, gid int, err error) {
 					if err == nil {
 						stats.chown.Add(1)
 					}
@@ -351,7 +361,7 @@ func main() {
 						logMsg("chown", fmt.Sprintf("%s -> %d:%d", path, uid, gid), err)
 					}
 				},
-				OnChtimes: func(path string, err error) {
+				OnDstChtimes: func(path string, err error) {
 					if err == nil {
 						stats.chtimes.Add(1)
 					}
@@ -359,19 +369,19 @@ func main() {
 						logMsg("chtimes", path, err)
 					}
 				},
-				OnChmodDetail: func(path string, before, after os.FileMode, err error) {
+				OnDstChmodDetail: func(path string, before, after os.FileMode, err error) {
 					if !shouldLog("chmod") {
 						return
 					}
 					logMsg("chmod", fmt.Sprintf("%s: %s -> %s", path, before.String(), after.String()), err)
 				},
-				OnChownDetail: func(path string, oldUID, oldGID, newUID, newGID int, err error) {
+				OnDstChownDetail: func(path string, oldUID, oldGID, newUID, newGID int, err error) {
 					if !shouldLog("chown") {
 						return
 					}
 					logMsg("chown", fmt.Sprintf("%s: %d:%d -> %d:%d", path, oldUID, oldGID, newUID, newGID), err)
 				},
-				OnChtimesDetail: func(path string, beforeAtime, beforeMtime, afterAtime, afterMtime time.Time, changedAtime, changedMtime bool, err error) {
+				OnDstChtimesDetail: func(path string, beforeAtime, beforeMtime, afterAtime, afterMtime time.Time, changedAtime, changedMtime bool, err error) {
 					if !shouldLog("chtimes") {
 						return
 					}

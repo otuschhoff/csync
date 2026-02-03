@@ -103,70 +103,78 @@ func (dl *defaultLogger) Printf(format string, v ...interface{}) {
 // Callbacks are called during various stages of the synchronization process
 // and can be used for logging, monitoring, or custom handling of sync events.
 type Callbacks struct {
-	// OnLstat is called for each source entry discovered via ReadDir (using entry.Info()).
+	// OnSrcLstat is called for each source entry discovered via ReadDir (using entry.Info()).
 	// Called with the path being examined, whether it's a directory, file info, and any error.
-	OnLstat func(path string, isDir bool, fileInfo os.FileInfo, err error)
+	OnSrcLstat func(path string, isDir bool, fileInfo os.FileInfo, err error)
 
-	// OnReadDir is called after reading a directory.
+	// OnDstLstat is called for each destination entry during comparison.
+	// Called with the path being examined, whether it's a directory, file info, and any error.
+	OnDstLstat func(path string, isDir bool, fileInfo os.FileInfo, err error)
+
+	// OnSrcReadDir is called after reading a source directory.
 	// Called with the directory path, its entries, and any error encountered.
-	OnReadDir func(path string, entries []os.DirEntry, err error)
+	OnSrcReadDir func(path string, entries []os.DirEntry, err error)
+
+	// OnDstReadDir is called after reading a destination directory.
+	// Called with the directory path, its entries, and any error encountered.
+	OnDstReadDir func(path string, entries []os.DirEntry, err error)
 
 	// OnCopy is called before and after copying a file.
 	// If err is nil, the copy was successful. Called with source path, destination path,
 	// file size in bytes, and any error.
 	OnCopy func(srcPath, dstPath string, size int64, err error)
 
-	// OnMkdir is called before and after creating a directory.
+	// OnDstMkdir is called before and after creating a destination directory.
 	// Called with the directory path, file mode, and any error.
-	OnMkdir func(path string, mode os.FileMode, err error)
+	OnDstMkdir func(path string, mode os.FileMode, err error)
 
-	// OnUnlink is called before and after removing a file.
+	// OnDstUnlink is called before and after removing a destination file.
 	// Called with the file path and any error encountered during removal.
-	OnUnlink func(path string, err error)
+	OnDstUnlink func(path string, err error)
 
-	// OnRmdir is called before and after removing an empty directory.
+	// OnDstRmdir is called before and after removing an empty destination directory.
 	// Called with the directory path and any error.
-	OnRmdir func(path string, err error)
+	OnDstRmdir func(path string, err error)
 
-	// OnRemoveAll is called when recursively removing a path.
+	// OnDstRemoveAll is called when recursively removing a destination path.
 	// Called with the path being removed and any error encountered.
-	OnRemoveAll func(path string, err error)
+	OnDstRemoveAll func(path string, err error)
 
-	// OnSymlink is called when creating a symlink.
+	// OnDstSymlink is called when creating a destination symlink.
 	// Called with the symlink path, target, and any error.
-	OnSymlink func(linkPath, target string, err error)
+	OnDstSymlink func(linkPath, target string, err error)
 
-	// OnChmod is called when changing permissions.
+	// OnDstChmod is called when changing destination permissions.
 	// Called with the path, new file mode, and any error.
-	OnChmod func(path string, mode os.FileMode, err error)
+	OnDstChmod func(path string, mode os.FileMode, err error)
 
-	// OnChmodDetail is called when changing permissions, with both the previous and new mode.
-	OnChmodDetail func(path string, before, after os.FileMode, err error)
+	// OnDstChmodDetail is called when changing destination permissions, with both the previous and new mode.
+	OnDstChmodDetail func(path string, before, after os.FileMode, err error)
 
-	// OnChown is called when changing ownership.
+	// OnDstChown is called when changing destination ownership.
 	// Called with the path, uid, gid, and any error.
-	OnChown func(path string, uid, gid int, err error)
+	OnDstChown func(path string, uid, gid int, err error)
 
-	// OnChownDetail is called when changing ownership with both the previous and new IDs.
-	OnChownDetail func(path string, oldUID, oldGID, newUID, newGID int, err error)
+	// OnDstChownDetail is called when changing destination ownership with both the previous and new IDs.
+	OnDstChownDetail func(path string, oldUID, oldGID, newUID, newGID int, err error)
 
-	// OnChtimes is called when changing modification/access times.
+	// OnDstChtimes is called when changing destination modification/access times.
 	// Called with the path and any error encountered.
-	OnChtimes func(path string, err error)
+	OnDstChtimes func(path string, err error)
 
-	// OnChtimesDetail is called when changing times with both the previous and new atime/mtime
+	// OnDstChtimesDetail is called when changing destination times with both the previous and new atime/mtime
 	// and booleans indicating which times needed an update.
-	OnChtimesDetail func(path string, beforeAtime, beforeMtime, afterAtime, afterMtime time.Time, changedAtime, changedMtime bool, err error)
+	OnDstChtimesDetail func(path string, beforeAtime, beforeMtime, afterAtime, afterMtime time.Time, changedAtime, changedMtime bool, err error)
 
-	// OnUnlinkDetail is called when removing a file or symlink, with the size of the removed file.
+	// OnDstUnlinkDetail is called when removing a destination file or symlink, with the size of the removed file.
 	// Called with the file path, file size in bytes, and any error encountered.
-	OnUnlinkDetail func(path string, size int64, err error)
+	OnDstUnlinkDetail func(path string, size int64, err error)
 
-	// OnRemoveAllDetail is called when recursively removing a path, with the total size removed.
+	// OnDstRemoveAllDetail is called when recursively removing a destination path, with the total size removed.
 	// Called with the path being removed, total size in bytes, and any error encountered.
-	OnRemoveAllDetail func(path string, size int64, err error)
+	OnDstRemoveAllDetail func(path string, size int64, err error)
 
-	// OnIgnore is called to determine if a file or directory should be ignored during sync.
+	// OnIgnore is called to determine if a source file or directory should be ignored during sync.
 	// Called with the entry name (basename), full absolute path, whether it's a directory,
 	// the stat information (from entry.Info or Lstat), and any stat error.
 	// Return true to skip this entry, false to process it.
@@ -740,8 +748,8 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	w.synchronizer.startOp(w, "readdir", srcAbsPath)
 	srcEntries, err := os.ReadDir(srcAbsPath)
 	w.synchronizer.endOp(w, "readdir")
-	if w.synchronizer.callbacks.OnReadDir != nil {
-		w.synchronizer.callbacks.OnReadDir(srcAbsPath, srcEntries, err)
+	if w.synchronizer.callbacks.OnSrcReadDir != nil {
+		w.synchronizer.callbacks.OnSrcReadDir(srcAbsPath, srcEntries, err)
 	}
 
 	if err != nil {
@@ -755,30 +763,30 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 	// Emit OnLstat for each source entry using the info populated by ReadDir
 	entryInfo := make(map[string]os.FileInfo, len(srcEntries))
 	entryErr := make(map[string]error)
-	if w.synchronizer.callbacks.OnLstat != nil {
+	if w.synchronizer.callbacks.OnSrcLstat != nil {
 		for _, entry := range srcEntries {
 			entryPath := filepath.Join(srcAbsPath, entry.Name())
 			w.synchronizer.startOp(w, "lstat", entryPath)
 			info, infoErr := entry.Info()
 			w.synchronizer.endOp(w, "lstat")
-			w.synchronizer.callbacks.OnLstat(filepath.Join(srcAbsPath, entry.Name()), entry.IsDir(), info, infoErr)
+			w.synchronizer.callbacks.OnSrcLstat(filepath.Join(srcAbsPath, entry.Name()), entry.IsDir(), info, infoErr)
 			if infoErr == nil {
 				entryInfo[entry.Name()] = info
 			} else {
 				entryErr[entry.Name()] = infoErr
 			}
 		}
-	} else {
-		for _, entry := range srcEntries {
-			entryPath := filepath.Join(srcAbsPath, entry.Name())
-			w.synchronizer.startOp(w, "lstat", entryPath)
-			info, infoErr := entry.Info()
-			w.synchronizer.endOp(w, "lstat")
-			if infoErr == nil {
-				entryInfo[entry.Name()] = info
-			} else {
-				entryErr[entry.Name()] = infoErr
-			}
+	}
+	// Always track lstat for source entries
+	for _, entry := range srcEntries {
+		entryPath := filepath.Join(srcAbsPath, entry.Name())
+		w.synchronizer.startOp(w, "lstat", entryPath)
+		info, infoErr := entry.Info()
+		w.synchronizer.endOp(w, "lstat")
+		if infoErr == nil {
+			entryInfo[entry.Name()] = info
+		} else {
+			entryErr[entry.Name()] = infoErr
 		}
 	}
 
@@ -793,6 +801,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 		w.synchronizer.startOp(w, "lstat", entryPath)
 		info, err := os.Lstat(entryPath)
 		w.synchronizer.endOp(w, "lstat")
+		if w.synchronizer.callbacks.OnSrcLstat != nil {
+			w.synchronizer.callbacks.OnSrcLstat(entryPath, info != nil && info.IsDir(), info, err)
+		}
 		if err == nil {
 			entryInfo[name] = info
 		} else {
@@ -803,12 +814,27 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 
 	// Build map of destination entries
 	w.synchronizer.startOp(w, "readdir", dstAbsPath)
-	dstEntries, _ := os.ReadDir(dstAbsPath)
+	dstEntries, dstReadErr := os.ReadDir(dstAbsPath)
 	w.synchronizer.endOp(w, "readdir")
+	if w.synchronizer.callbacks.OnDstReadDir != nil {
+		w.synchronizer.callbacks.OnDstReadDir(dstAbsPath, dstEntries, dstReadErr)
+	}
 	if branch.isRoot() {
 		w.synchronizer.signalRootRead()
 	}
 	dstMap := make(map[string]os.DirEntry)
+
+	// Emit OnDstLstat for each destination entry using the info populated by ReadDir
+	if w.synchronizer.callbacks.OnDstLstat != nil {
+		for _, entry := range dstEntries {
+			entryPath := filepath.Join(dstAbsPath, entry.Name())
+			w.synchronizer.startOp(w, "lstat", entryPath)
+			info, infoErr := entry.Info()
+			w.synchronizer.endOp(w, "lstat")
+			w.synchronizer.callbacks.OnDstLstat(entryPath, entry.IsDir(), info, infoErr)
+		}
+	}
+
 	for _, entry := range dstEntries {
 		dstMap[entry.Name()] = entry
 	}
@@ -844,8 +870,8 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 					w.synchronizer.startOp(w, "mkdir", dstChildPath)
 					err := os.Mkdir(dstChildPath, mode)
 					w.synchronizer.endOp(w, "mkdir")
-					if w.synchronizer.callbacks.OnMkdir != nil {
-						w.synchronizer.callbacks.OnMkdir(dstChildPath, mode, err)
+					if w.synchronizer.callbacks.OnDstMkdir != nil {
+						w.synchronizer.callbacks.OnDstMkdir(dstChildPath, mode, err)
 					}
 					// Sync inode attributes
 					w.synchronizer.syncInodeAttrs(w, srcChildPath, dstChildPath)
@@ -892,8 +918,8 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 					w.synchronizer.startOp(w, "symlink", dstChildPath)
 					err := os.Symlink(linkTarget, dstChildPath)
 					w.synchronizer.endOp(w, "symlink")
-					if w.synchronizer.callbacks.OnSymlink != nil {
-						w.synchronizer.callbacks.OnSymlink(dstChildPath, linkTarget, err)
+					if w.synchronizer.callbacks.OnDstSymlink != nil {
+						w.synchronizer.callbacks.OnDstSymlink(dstChildPath, linkTarget, err)
 					}
 				}
 			}
@@ -915,6 +941,9 @@ func (w *syncWorker) processBranch(branch *syncBranch) error {
 				w.synchronizer.startOp(w, "lstat", dstChildPath)
 				dstInfo, _ := os.Lstat(dstChildPath)
 				w.synchronizer.endOp(w, "lstat")
+				if w.synchronizer.callbacks.OnDstLstat != nil && dstInfo != nil {
+					w.synchronizer.callbacks.OnDstLstat(dstChildPath, dstInfo.IsDir(), dstInfo, nil)
+				}
 				// Copy if size or modtime differs
 				shouldCopy = srcInfo.Size() != dstInfo.Size() || srcInfo.ModTime() != dstInfo.ModTime()
 			}
@@ -1003,19 +1032,19 @@ func (s *Synchronizer) syncInodeAttrs(worker *syncWorker, srcPath, dstPath strin
 			s.endOp(worker, "chmod")
 			// Log but don't fail
 			s.logger.Printf("WARN: failed to chmod %s: %v\n", dstPath, err)
-			if s.callbacks.OnChmod != nil {
-				s.callbacks.OnChmod(dstPath, mode, err)
+			if s.callbacks.OnDstChmod != nil {
+				s.callbacks.OnDstChmod(dstPath, mode, err)
 			}
-			if s.callbacks.OnChmodDetail != nil {
-				s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, err)
+			if s.callbacks.OnDstChmodDetail != nil {
+				s.callbacks.OnDstChmodDetail(dstPath, beforeMode, mode, err)
 			}
 		} else {
 			s.endOp(worker, "chmod")
-			if s.callbacks.OnChmod != nil {
-				s.callbacks.OnChmod(dstPath, mode, nil)
+			if s.callbacks.OnDstChmod != nil {
+				s.callbacks.OnDstChmod(dstPath, mode, nil)
 			}
-			if s.callbacks.OnChmodDetail != nil {
-				s.callbacks.OnChmodDetail(dstPath, beforeMode, mode, nil)
+			if s.callbacks.OnDstChmodDetail != nil {
+				s.callbacks.OnDstChmodDetail(dstPath, beforeMode, mode, nil)
 			}
 		}
 	}
@@ -1038,19 +1067,19 @@ func (s *Synchronizer) syncInodeAttrs(worker *syncWorker, srcPath, dstPath strin
 				s.endOp(worker, "chtimes")
 				// Log but don't fail
 				s.logger.Printf("WARN: failed to chtimes %s: %v\n", dstPath, err)
-				if s.callbacks.OnChtimes != nil {
-					s.callbacks.OnChtimes(dstPath, err)
+				if s.callbacks.OnDstChtimes != nil {
+					s.callbacks.OnDstChtimes(dstPath, err)
 				}
-				if s.callbacks.OnChtimesDetail != nil {
-					s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, err)
+				if s.callbacks.OnDstChtimesDetail != nil {
+					s.callbacks.OnDstChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, err)
 				}
 			} else {
 				s.endOp(worker, "chtimes")
-				if s.callbacks.OnChtimes != nil {
-					s.callbacks.OnChtimes(dstPath, nil)
+				if s.callbacks.OnDstChtimes != nil {
+					s.callbacks.OnDstChtimes(dstPath, nil)
 				}
-				if s.callbacks.OnChtimesDetail != nil {
-					s.callbacks.OnChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, nil)
+				if s.callbacks.OnDstChtimesDetail != nil {
+					s.callbacks.OnDstChtimesDetail(dstPath, beforeAtime, beforeMtime, atimeToSet, modTime, changedAtime, changedMtime, nil)
 				}
 			}
 		}
@@ -1068,19 +1097,19 @@ func (s *Synchronizer) syncInodeAttrs(worker *syncWorker, srcPath, dstPath strin
 				s.endOp(worker, "chown")
 				// Log but don't fail (non-root users typically can't chown)
 				s.logger.Printf("DEBUG: failed to chown %s to %d:%d: %v\n", dstPath, uid, gid, err)
-				if s.callbacks.OnChown != nil {
-					s.callbacks.OnChown(dstPath, uid, gid, err)
+				if s.callbacks.OnDstChown != nil {
+					s.callbacks.OnDstChown(dstPath, uid, gid, err)
 				}
-				if s.callbacks.OnChownDetail != nil {
-					s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, err)
+				if s.callbacks.OnDstChownDetail != nil {
+					s.callbacks.OnDstChownDetail(dstPath, beforeUID, beforeGID, uid, gid, err)
 				}
 			} else {
 				s.endOp(worker, "chown")
-				if s.callbacks.OnChown != nil {
-					s.callbacks.OnChown(dstPath, uid, gid, nil)
+				if s.callbacks.OnDstChown != nil {
+					s.callbacks.OnDstChown(dstPath, uid, gid, nil)
 				}
-				if s.callbacks.OnChownDetail != nil {
-					s.callbacks.OnChownDetail(dstPath, beforeUID, beforeGID, uid, gid, nil)
+				if s.callbacks.OnDstChownDetail != nil {
+					s.callbacks.OnDstChownDetail(dstPath, beforeUID, beforeGID, uid, gid, nil)
 				}
 			}
 		}
@@ -1205,14 +1234,14 @@ func (s *Synchronizer) unlink(worker *syncWorker, path string) error {
 	s.startOp(worker, "unlink", path)
 	err := os.Remove(path)
 	s.endOp(worker, "unlink")
-	if s.callbacks.OnUnlink != nil {
-		s.callbacks.OnUnlink(path, err)
+	if s.callbacks.OnDstUnlink != nil {
+		s.callbacks.OnDstUnlink(path, err)
 	}
 	return err
 }
 
 // unlinkWithSize removes a file or symlink with size information for detailed tracking.
-// Calls both OnUnlink and OnUnlinkDetail callbacks if present.
+// Calls both OnDstUnlink and OnDstUnlinkDetail callbacks if present.
 func (s *Synchronizer) unlinkWithSize(worker *syncWorker, path string, size int64) error {
 	if s.readOnly {
 		return nil
@@ -1221,11 +1250,11 @@ func (s *Synchronizer) unlinkWithSize(worker *syncWorker, path string, size int6
 	s.startOp(worker, "unlink", path)
 	err := os.Remove(path)
 	s.endOp(worker, "unlink")
-	if s.callbacks.OnUnlink != nil {
-		s.callbacks.OnUnlink(path, err)
+	if s.callbacks.OnDstUnlink != nil {
+		s.callbacks.OnDstUnlink(path, err)
 	}
-	if s.callbacks.OnUnlinkDetail != nil {
-		s.callbacks.OnUnlinkDetail(path, size, err)
+	if s.callbacks.OnDstUnlinkDetail != nil {
+		s.callbacks.OnDstUnlinkDetail(path, size, err)
 	}
 	return err
 }
@@ -1241,14 +1270,14 @@ func (s *Synchronizer) removeAll(worker *syncWorker, path string) error {
 	s.startOp(worker, "removeall", path)
 	err := os.RemoveAll(path)
 	s.endOp(worker, "removeall")
-	if s.callbacks.OnRemoveAll != nil {
-		s.callbacks.OnRemoveAll(path, err)
+	if s.callbacks.OnDstRemoveAll != nil {
+		s.callbacks.OnDstRemoveAll(path, err)
 	}
 	return err
 }
 
 // removeAllWithSize recursively removes a directory tree with size information for detailed tracking.
-// Calls both OnRemoveAll and OnRemoveAllDetail callbacks if present.
+// Calls both OnDstRemoveAll and OnDstRemoveAllDetail callbacks if present.
 func (s *Synchronizer) removeAllWithSize(worker *syncWorker, path string, size int64) error {
 	if s.readOnly {
 		return nil
@@ -1257,11 +1286,11 @@ func (s *Synchronizer) removeAllWithSize(worker *syncWorker, path string, size i
 	s.startOp(worker, "removeall", path)
 	err := os.RemoveAll(path)
 	s.endOp(worker, "removeall")
-	if s.callbacks.OnRemoveAll != nil {
-		s.callbacks.OnRemoveAll(path, err)
+	if s.callbacks.OnDstRemoveAll != nil {
+		s.callbacks.OnDstRemoveAll(path, err)
 	}
-	if s.callbacks.OnRemoveAllDetail != nil {
-		s.callbacks.OnRemoveAllDetail(path, size, err)
+	if s.callbacks.OnDstRemoveAllDetail != nil {
+		s.callbacks.OnDstRemoveAllDetail(path, size, err)
 	}
 	return err
 }
